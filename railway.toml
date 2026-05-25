@@ -3,4 +3,4 @@
 
 [deploy]
 startCommand = "npm run start"
-preDeployCommand = ["npx prisma migrate deploy", "npm run db:bootstrap"]
+preDeployCommand = ["npx prisma migrate deploy && npm run db:bootstrap"]
