@@ -15,20 +15,34 @@ const prisma = new PrismaClient();
 
 const CONSENT_VERSION = "2026-04-01";
 
-function readEnv(name: string): string {
+function readOptionalEnv(name: string): string | null {
   const value = process.env[name];
-  if (!value || !value.trim()) {
-    throw new Error(`환경 변수 ${name} 가 비어 있습니다.`);
-  }
+  if (!value || !value.trim()) return null;
   return value.trim();
 }
 
 async function main() {
-  const email = readEnv("SEED_SUPER_ADMIN_EMAIL").toLowerCase();
-  const password = readEnv("SEED_SUPER_ADMIN_PASSWORD");
+  const rawEmail = readOptionalEnv("SEED_SUPER_ADMIN_EMAIL");
+  const password = readOptionalEnv("SEED_SUPER_ADMIN_PASSWORD");
+
+  // 두 변수가 모두 비어 있으면 운영 중인 환경(부트스트랩 완료 후)으로 간주하고
+  // 조용히 종료한다. 이로써 preDeployCommand 등에 묶여 있어도 매번 돌면서 실패하지 않는다.
+  if (!rawEmail && !password) {
+    console.log(
+      "[bootstrap] SEED_SUPER_ADMIN_EMAIL/PASSWORD 미설정 — 부트스트랩 스킵"
+    );
+    return;
+  }
+
+  if (!rawEmail || !password) {
+    throw new Error(
+      "SEED_SUPER_ADMIN_EMAIL 와 SEED_SUPER_ADMIN_PASSWORD 는 함께 설정해야 합니다."
+    );
+  }
   if (password.length < 8) {
     throw new Error("SEED_SUPER_ADMIN_PASSWORD 는 최소 8자 이상이어야 합니다.");
   }
+  const email = rawEmail.toLowerCase();
   const rotate =
     process.env.SEED_SUPER_ADMIN_ROTATE_PASSWORD === "1" ||
     process.env.SEED_SUPER_ADMIN_ROTATE_PASSWORD === "true";
