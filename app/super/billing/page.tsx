@@ -3,7 +3,6 @@
 import { PageHeader } from "@/components/ui/PageHeader";
 import { priceSuffix } from "@/lib/pricing";
 import {
-  btnPrimary,
   btnSecondary,
   btnSuccess,
   emptyState,

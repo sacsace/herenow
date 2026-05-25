@@ -24,7 +24,7 @@ import { segmentedBtn, segmentedWrap } from "@/lib/uiStyles";
 import type { BillingPeriod } from "@prisma/client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type Tier = {
   id: string;
@@ -53,23 +53,26 @@ export default function SignupPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const loadTiers = (period: BillingPeriod) => {
-    void fetch(`/api/public/pricing-tiers?period=${period}`)
-      .then((r) => r.json())
-      .then((j: { tiers?: Tier[] }) => {
-        const list = (j.tiers ?? []).map((row) => ({
-          ...row,
-          trialDays: row.trialDays ?? null,
-        }));
-        setTiers(list);
-        setTierId(list[0]?.id ?? "");
-      })
-      .catch(() => setError(t("signup.errorTiers")));
-  };
+  const loadTiers = useCallback(
+    (period: BillingPeriod) => {
+      void fetch(`/api/public/pricing-tiers?period=${period}`)
+        .then((r) => r.json())
+        .then((j: { tiers?: Tier[] }) => {
+          const list = (j.tiers ?? []).map((row) => ({
+            ...row,
+            trialDays: row.trialDays ?? null,
+          }));
+          setTiers(list);
+          setTierId(list[0]?.id ?? "");
+        })
+        .catch(() => setError(t("signup.errorTiers")));
+    },
+    [t]
+  );
 
   useEffect(() => {
     loadTiers(billingPeriod);
-  }, [billingPeriod, t]);
+  }, [billingPeriod, loadTiers]);
 
   const filteredTiers = tiers.filter((tr) => tr.billingPeriod === billingPeriod);
 
