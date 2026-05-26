@@ -3,11 +3,14 @@ import { formatInTimeZone } from "date-fns-tz";
 
 /** JS Date.getDay(): 0=일요일 … 6=토요일 */
 export const WEEKDAY_LABELS_KO = ["일", "월", "화", "수", "목", "금", "토"] as const;
-/** Same indexing as WEEKDAY_LABELS_KO (Sun..Sat) */
 export const WEEKDAY_LABELS_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
-export function weekdayLabels(locale: "ko" | "en"): readonly string[] {
-  return locale === "en" ? WEEKDAY_LABELS_EN : WEEKDAY_LABELS_KO;
+/**
+ * 0(일요일)~6(토요일) 인덱스를 받아 로케일에 맞는 짧은 요일 라벨을 반환.
+ */
+export function weekdayShortLabel(dayIndex: number, locale: "ko" | "en"): string {
+  if (dayIndex < 0 || dayIndex > 6) return "";
+  return locale === "en" ? WEEKDAY_LABELS_EN[dayIndex] : WEEKDAY_LABELS_KO[dayIndex];
 }
 
 export const DEFAULT_WORK_DAYS = "1,2,3,4,5";

@@ -1,7 +1,7 @@
 "use client";
 
 import { useI18n } from "@/components/LanguageProvider";
-import { weekdayLabels } from "@/lib/companyWorkSchedule";
+import { weekdayShortLabel } from "@/lib/companyWorkSchedule";
 import {
   btnPrimary,
   chipBtn,
@@ -26,7 +26,6 @@ type Settings = {
 
 export function AdminCompanySettings() {
   const { t, locale } = useI18n();
-  const dayLabels = weekdayLabels(locale);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [workStart, setWorkStart] = useState("09:00");
   const [workEnd, setWorkEnd] = useState("18:00");
@@ -192,7 +191,7 @@ export function AdminCompanySettings() {
                       onClick={() => toggleDay(d)}
                       className={chipBtn(workDaySet.has(d))}
                     >
-                      {dayLabels[d]}
+                      {weekdayShortLabel(d, locale)}
                     </button>
                   ))}
                 </div>
