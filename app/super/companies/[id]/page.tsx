@@ -1,5 +1,6 @@
 "use client";
 
+import { AdminCompanySettings } from "@/components/admin/AdminCompanySettings";
 import { AdminTodayOverview } from "@/components/admin/AdminTodayOverview";
 import { MonthlyAttendanceOverview } from "@/components/admin/MonthlyAttendanceOverview";
 import { SuperCompanyAttendanceStats } from "@/components/super/SuperCompanyAttendanceStats";
@@ -277,6 +278,7 @@ export default function SuperCompanyUsersPage() {
         <div className="space-y-8">
           <AdminTodayOverview companyId={id} hideViewAllLink />
           <MonthlyAttendanceOverview companyId={id} hideViewAllLink />
+          <AdminCompanySettings companyId={id} />
         </div>
       )}
 

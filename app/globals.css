@@ -80,6 +80,8 @@ body {
 @layer components {
   /** Custom chevron — do not combine with Tailwind bg-* on the same element (causes tile repeat) */
   .auth-select-field {
+    -webkit-appearance: none;
+    -moz-appearance: none;
     appearance: none;
     background-color: var(--fill-secondary);
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='M4 6l4 4 4-4' stroke='%233C3C43' stroke-opacity='0.55' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");

@@ -119,12 +119,28 @@ model Company {
   users                User[]
   employees            Employee[]
   sites                Site[]
+  departments          Department[]
   attendanceRecords    AttendanceRecord[]
   attendanceExceptions AttendanceException[]
   approvalLogs         ApprovalLog[]
   billingRequests      BillingRequest[]
   integrations         CompanyIntegration[]
   integrationOutbox    IntegrationOutbox[]
+}
+
+/// 회사별 부서 (조직도) — 회사 내 유일한 이름
+model Department {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employees Employee[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
 }
 
 /// SUPER_ADMIN은 companyId 없음 가능
@@ -151,6 +167,9 @@ model Employee {
   userId    String   @unique
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String
+  /// 소속 부서 — 부서 삭제 시 직원은 미배정으로 남김(SetNull)
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   /// MVS 등 외부 시스템 직원 ID
   externalEmployeeId String?
   /// 128차원 안면 임베딩(JSON 배열). 출근 시 본인 확인용
@@ -161,6 +180,7 @@ model Employee {
   attendanceRecords AttendanceRecord[]
 
   @@index([companyId])
+  @@index([departmentId])
 }
 
 model Site {

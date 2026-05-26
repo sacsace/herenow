@@ -99,3 +99,16 @@ export function evaluateAttendanceWorkFlags(
 export function workDaysToArray(workDays: string | null | undefined): number[] {
   return [...parseWorkDays(workDays)].sort((a, b) => a - b);
 }
+
+/**
+ * "지금 퇴근하면 조퇴인가?"를 판정.
+ * 회사 근무일이며 회사 타임존 기준 현재시각이 workEndTime 이전일 때만 true.
+ */
+export function isCheckOutEarly(
+  timestamp: Date,
+  timeZone: string,
+  schedule: CompanyWorkSchedule
+): boolean {
+  const flags = evaluateAttendanceWorkFlags(timestamp, timeZone, "CHECK_OUT", schedule);
+  return flags.isEarlyLeave;
+}

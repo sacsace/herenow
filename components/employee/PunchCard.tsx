@@ -63,6 +63,7 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
   const [checkInMode, setCheckInMode] = useState<"normal" | "businessTrip">("normal");
   const [businessTripLocation, setBusinessTripLocation] = useState("");
   const [businessTripReason, setBusinessTripReason] = useState("");
+  const [earlyLeaveReason, setEarlyLeaveReason] = useState("");
   const [memo, setMemo] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
@@ -141,15 +142,33 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
 
   function readPositionOnce(): Promise<GeolocationPosition> {
     return new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error("이 브라우저는 위치 정보를 지원하지 않습니다."));
+      if (typeof window !== "undefined" && !window.isSecureContext) {
+        reject(new Error(t("employee.geoInsecureContext")));
         return;
       }
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: true,
-        maximumAge: 0,
-        timeout: 20000,
-      });
+      if (!navigator.geolocation) {
+        reject(new Error(t("employee.geoUnsupported")));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        resolve,
+        (err) => {
+          // iOS Safari 의 권한 거부/측위 실패에 사람이 읽을 수 있는 메시지 부여
+          let msg = t("employee.geoFail");
+          if (err && typeof err === "object" && "code" in err) {
+            const code = (err as GeolocationPositionError).code;
+            if (code === 1) msg = t("employee.geoPermissionDenied");
+            else if (code === 2) msg = t("employee.geoPositionUnavailable");
+            else if (code === 3) msg = t("employee.geoTimeout");
+          }
+          reject(new Error(msg));
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 20000,
+        }
+      );
     });
   }
 
@@ -176,7 +195,7 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
       if (e && typeof e === "object" && "message" in e) {
         setMsg(String((e as { message?: string }).message));
       } else {
-        setMsg("위치를 가져오지 못했습니다.");
+        setMsg(t("employee.geoFail"));
       }
     }
     setMapBusy(false);
@@ -265,6 +284,12 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
   }
 
   async function submitCheckOut() {
+    // 조퇴(정규 퇴근시각 이전 퇴근) 인 경우 사유 필수 — 클라이언트 선검증으로 즉시 안내
+    if (punchStatus?.earlyLeaveExpected && !earlyLeaveReason.trim()) {
+      setMsg(t("employee.earlyLeaveReasonRequired"));
+      return;
+    }
+
     setMsg(null);
     setBusy(true);
     try {
@@ -283,30 +308,39 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
           longitude: lng,
           accuracy: acc,
           memo: memo.trim() || undefined,
+          earlyLeaveReason: earlyLeaveReason.trim() || undefined,
         }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // 서버가 사유를 요구하는 케이스 — 사용자에게 입력 안내
+        if (j.code === "EARLY_LEAVE_REASON_REQUIRED") {
+          setMsg(t("employee.earlyLeaveReasonRequired"));
+          setBusy(false);
+          await reloadPunchStatus();
+          return;
+        }
         const err = j.error as unknown;
         setMsg(
           typeof err === "string"
             ? err
             : err != null
               ? JSON.stringify(err)
-              : "저장에 실패했습니다."
+              : t("employee.saveFail")
         );
         setBusy(false);
         return;
       }
-      setMsg(j.message ?? "저장되었습니다.");
+      setMsg(j.message ?? t("employee.saved"));
       setMemo("");
+      setEarlyLeaveReason("");
       await loadRecords();
       await reloadPunchStatus();
     } catch (e: unknown) {
       if (e && typeof e === "object" && "message" in e) {
         setMsg(String((e as { message?: string }).message));
       } else {
-        setMsg("위치를 가져오지 못했거나 네트워크 오류가 발생했습니다.");
+        setMsg(t("employee.saveFail"));
       }
     }
     setBusy(false);
@@ -550,13 +584,43 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
 
         {canCheckOut && !punchStatusLoading && (
           <div className="mt-6 border-t border-[var(--separator)] pt-5">
+            {punchStatus?.earlyLeaveExpected && (
+              <div className={`${bannerWarning} mb-3 space-y-2`}>
+                <p className="!bg-transparent !p-0 text-[0.8125rem] font-semibold">
+                  {punchStatus.workEndTime
+                    ? t("employee.earlyLeaveNoticeWithTime").replace(
+                        "{time}",
+                        punchStatus.workEndTime
+                      )
+                    : t("employee.earlyLeaveNotice")}
+                </p>
+                <label className={label}>
+                  {t("employee.earlyLeaveReasonLabel")}
+                  <span className="text-[var(--apple-red)]"> *</span>
+                </label>
+                <textarea
+                  className={`${input} min-h-[5rem]`}
+                  rows={3}
+                  value={earlyLeaveReason}
+                  onChange={(e) => setEarlyLeaveReason(e.target.value)}
+                  placeholder={t("employee.earlyLeaveReasonPlaceholder")}
+                  maxLength={2000}
+                  disabled={busy}
+                />
+              </div>
+            )}
             <button
               type="button"
-              disabled={busy}
+              disabled={
+                busy ||
+                (Boolean(punchStatus?.earlyLeaveExpected) && !earlyLeaveReason.trim())
+              }
               onClick={() => void submitCheckOut()}
               className={btnPrimary + " w-full min-h-[3rem] py-3.5 text-[1.0625rem] sm:min-h-[3.25rem]"}
             >
-              {t("employee.checkOutOnly")}
+              {punchStatus?.earlyLeaveExpected
+                ? t("employee.earlyLeaveSubmitButton")
+                : t("employee.checkOutOnly")}
             </button>
           </div>
         )}

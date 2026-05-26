@@ -30,6 +30,8 @@ const bodySchema = z
     isBusinessTrip: z.boolean().optional().default(false),
     businessTripLocation: z.string().trim().min(1).max(200).optional(),
     businessTripReason: z.string().trim().min(1).max(2000).optional(),
+    /** 정규 퇴근 시각 이전 퇴근 시 필수 — 관리자 승인 대상 */
+    earlyLeaveReason: z.string().trim().min(1).max(2000).optional(),
     photoUrl: z.string().max(2_000_000).optional().nullable(),
     deviceInfo: z.string().max(500).optional(),
     /** 출근 시 필수: 등록 얼굴과 일치 검증 */
@@ -81,6 +83,7 @@ export async function POST(req: Request) {
     isBusinessTrip,
     businessTripLocation,
     businessTripReason,
+    earlyLeaveReason,
     photoUrl,
     deviceInfo,
     faceDescriptor,
@@ -203,6 +206,19 @@ export async function POST(req: Request) {
     siteId = isBusinessTrip && type === "CHECK_IN" ? null : site.id;
   }
 
+  // 조퇴(정규 퇴근시각 이전 퇴근) 인 경우 사유 필수 + 관리자 승인 대상으로 처리
+  const earlyLeavePending = type === "CHECK_OUT" && workFlags.isEarlyLeave;
+  const trimmedEarlyReason = earlyLeaveReason?.trim() || null;
+  if (earlyLeavePending && !trimmedEarlyReason) {
+    return NextResponse.json(
+      {
+        error: "조퇴 사유가 필요합니다. 사유를 입력하면 관리자 승인 후 처리됩니다.",
+        code: "EARLY_LEAVE_REASON_REQUIRED",
+      },
+      { status: 400 }
+    );
+  }
+
   const result = await prisma.$transaction(async (tx) => {
     const record = await tx.attendanceRecord.create({
       data: {
@@ -214,7 +230,8 @@ export async function POST(req: Request) {
         longitude,
         accuracy: accuracy ?? null,
         distanceFromSite,
-        status: "APPROVED",
+        // 조퇴 시 PENDING — 관리자 승인 후 APPROVED 로 전환
+        status: earlyLeavePending ? "PENDING" : "APPROVED",
         memo: memo?.trim() || null,
         isBusinessTrip: type === "CHECK_IN" ? isBusinessTrip : false,
         businessTripLocation:
@@ -231,7 +248,22 @@ export async function POST(req: Request) {
       },
       include: { site: { select: { name: true } } },
     });
-    return { record };
+
+    let exceptionId: string | null = null;
+    if (earlyLeavePending && trimmedEarlyReason) {
+      const ex = await tx.attendanceException.create({
+        data: {
+          companyId: session.user.companyId!,
+          attendanceId: record.id,
+          reason: trimmedEarlyReason,
+          status: "PENDING",
+        },
+        select: { id: true },
+      });
+      exceptionId = ex.id;
+    }
+
+    return { record, exceptionId };
   });
 
   void enqueueMvsAttendanceIfEnabled(
@@ -252,7 +284,10 @@ export async function POST(req: Request) {
     isOvertime: result.record.isOvertime,
     isHolidayWork: result.record.isHolidayWork,
     overtimeMinutes: result.record.overtimeMinutes,
-    exceptionId: null,
-    message: "정상 처리되었습니다.",
+    exceptionId: result.exceptionId,
+    pendingApproval: earlyLeavePending,
+    message: earlyLeavePending
+      ? "조퇴 요청이 접수되었습니다. 관리자 승인 후 확정됩니다."
+      : "정상 처리되었습니다.",
   });
 }

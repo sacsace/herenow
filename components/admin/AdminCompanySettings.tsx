@@ -24,7 +24,12 @@ type Settings = {
   canEdit: boolean;
 };
 
-export function AdminCompanySettings() {
+type Props = {
+  /** SUPER_ADMIN이 다른 회사 설정을 볼·편집할 때만 지정. 미지정 시 세션 회사. */
+  companyId?: string;
+};
+
+export function AdminCompanySettings({ companyId }: Props = {}) {
   const { t, locale } = useI18n();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [workStart, setWorkStart] = useState("09:00");
@@ -35,10 +40,12 @@ export function AdminCompanySettings() {
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
+  const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : "";
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const r = await fetch("/api/admin/settings");
+    const r = await fetch(`/api/admin/settings${qs}`);
     const j = await r.json().catch(() => ({}));
     setLoading(false);
     if (!r.ok) {
@@ -61,7 +68,7 @@ export function AdminCompanySettings() {
     setWorkStart(s.workStartTime ?? "09:00");
     setWorkEnd(s.workEndTime ?? "18:00");
     setWorkDaySet(new Set(s.workDaysArray ?? [1, 2, 3, 4, 5]));
-  }, [t]);
+  }, [t, qs]);
 
   useEffect(() => {
     void load();
@@ -72,7 +79,7 @@ export function AdminCompanySettings() {
     setSaving(true);
     setError(null);
     setSaved(false);
-    const r = await fetch("/api/admin/settings", {
+    const r = await fetch(`/api/admin/settings${qs}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

@@ -34,19 +34,45 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "No company" }, { status: 400 });
   }
 
-  const employees = await prisma.employee.findMany({
-    where: { companyId },
-    orderBy: { name: "asc" },
-    include: { user: { select: { email: true, role: true } } },
-  });
-
-  return NextResponse.json({ employees });
+  try {
+    const employees = await prisma.employee.findMany({
+      where: { companyId },
+      orderBy: { name: "asc" },
+      include: {
+        user: { select: { email: true, role: true } },
+        department: { select: { id: true, name: true } },
+      },
+    });
+    return NextResponse.json({ employees });
+  } catch (e) {
+    console.error("[employees GET]", e);
+    const message = e instanceof Error ? e.message : "Internal error";
+    // DB 스키마가 최신이 아닐 때 (Department 테이블 미생성) 친절한 에러
+    if (
+      message.includes("Unknown field") ||
+      message.includes("does not exist") ||
+      message.includes("relation \"Department\"") ||
+      message.includes("column") ||
+      message.includes("P2021") ||
+      message.includes("P2022")
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "DB 스키마가 최신이 아닙니다. 서버를 중지한 뒤 npx prisma migrate deploy && npx prisma generate 실행 후 다시 시도해 주세요.",
+        },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json({ error: `직원 조회 실패: ${message}` }, { status: 500 });
+  }
 }
 
 const postSchema = z.object({
   email: z.string().email().transform((e) => e.toLowerCase().trim()),
   name: z.string().min(1).max(120),
   password: z.string().min(8).max(200),
+  departmentId: z.string().min(1).max(40).optional().nullable(),
 });
 
 /** 직원 추가 (좌석 상한 seatLimit 적용) */
@@ -76,7 +102,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { email, name, password } = parsed.data;
+  const { email, name, password, departmentId } = parsed.data;
   const role = Role.EMPLOYEE;
 
   const company = await prisma.company.findUnique({ where: { id: companyId } });
@@ -88,6 +114,17 @@ export async function POST(req: Request) {
       { error: `좌석 상한(${company.seatLimit}명)에 도달했습니다. 요금제를 상향하세요.` },
       { status: 403 }
     );
+  }
+
+  // 부서 ID가 들어오면 동일 회사 소속인지 확인 (다른 회사 부서 차단)
+  if (departmentId) {
+    const dep = await prisma.department.findUnique({
+      where: { id: departmentId },
+      select: { companyId: true },
+    });
+    if (!dep || dep.companyId !== companyId) {
+      return NextResponse.json({ error: "INVALID_DEPARTMENT" }, { status: 400 });
+    }
   }
 
   const dup = await prisma.user.findUnique({ where: { email } });
@@ -110,7 +147,12 @@ export async function POST(req: Request) {
         },
       });
       await tx.employee.create({
-        data: { companyId, userId: user.id, name: name.trim() },
+        data: {
+          companyId,
+          userId: user.id,
+          name: name.trim(),
+          departmentId: departmentId ?? null,
+        },
       });
     });
   } catch (e) {
