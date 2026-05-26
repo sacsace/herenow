@@ -15,7 +15,6 @@ import {
   emptyStateCompact,
   errorText,
   groupedCard,
-  groupedRow,
   input,
   label,
   link,
@@ -380,16 +379,18 @@ export default function AdminEmployeesPage() {
               return (
                 <li
                   key={e.id}
-                  className={`${groupedRow} ${i < employees.length - 1 ? "border-b border-[var(--separator)]" : ""}`}
+                  className={`px-5 py-2 text-[0.9375rem] leading-snug text-[var(--foreground)] sm:px-6 ${i < employees.length - 1 ? "border-b border-[var(--separator)]" : ""}`}
                 >
-                  <div className="grid grid-cols-1 items-center gap-x-4 gap-y-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium text-[var(--foreground)]">{e.name}</p>
-                      <p className="mt-0.5 truncate text-[0.8125rem] text-[var(--apple-label-secondary)]">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 sm:flex-nowrap">
+                    <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-y-0.5 sm:flex-nowrap">
+                      <p className="truncate font-medium text-[var(--foreground)] sm:w-[10rem] sm:shrink-0 md:w-[12rem]">
+                        {e.name}
+                      </p>
+                      <p className="truncate text-[0.8125rem] text-[var(--apple-label-secondary)]">
                         {e.user.email}
                       </p>
                     </div>
-                    <div className="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-[10rem_10rem]">
+                    <div className="grid w-full grid-cols-2 gap-2 sm:w-auto sm:shrink-0 sm:grid-cols-[10rem_10rem]">
                       {canEditThisRole ? (
                         <>
                           <label className="sr-only" htmlFor={`emp-role-${e.id}`}>
