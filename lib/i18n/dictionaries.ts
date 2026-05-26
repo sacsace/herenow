@@ -549,7 +549,7 @@ export const en = {
     todayTitle: "Today",
     todayLead: "Company time zone",
     todayCheckedIn: "Checked in",
-    todayComplete: "Complete pairs",
+    todayComplete: "Completed Attendance",
     todayPairs: "pairs",
     todayLate: "Late",
     todayPending: "Pending exceptions",
