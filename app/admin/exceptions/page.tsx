@@ -1,5 +1,6 @@
 "use client";
 
+import { useI18n } from "@/components/LanguageProvider";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
   btnSecondary,
@@ -26,6 +27,8 @@ type Ex = {
 };
 
 export default function AdminExceptionsPage() {
+  const { t, locale } = useI18n();
+  const dateLocale = locale === "en" ? "en-US" : "ko-KR";
   const [items, setItems] = useState<Ex[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -50,17 +53,28 @@ export default function AdminExceptionsPage() {
     if (r.ok) await load();
   }
 
+  function typeLabel(type: string) {
+    if (type === "CHECK_IN") return t("admin.exceptionsTypeCheckIn");
+    if (type === "CHECK_OUT") return t("admin.exceptionsTypeCheckOut");
+    return type;
+  }
+
   return (
     <div className={pageStack}>
-      <PageHeader title="예외 승인" subtitle="반경 외·기타 예외 출퇴근 요청을 검토합니다." />
+      <PageHeader
+        title={t("admin.exceptionsTitle")}
+        subtitle={t("admin.exceptionsSubtitle")}
+      />
 
       {loading ? (
-        <p className="text-[1rem] text-[var(--apple-label-secondary)]">불러오는 중…</p>
+        <p className="text-[1rem] text-[var(--apple-label-secondary)]">
+          {t("common.loading")}
+        </p>
       ) : items.length === 0 ? (
-        <p className={emptyState}>대기 중인 예외가 없습니다.</p>
+        <p className={emptyState}>{t("admin.exceptionsEmpty")}</p>
       ) : (
         <section>
-          <p className={sectionLabel}>대기 목록</p>
+          <p className={sectionLabel}>{t("admin.exceptionsListLabel")}</p>
           <ul className={groupedCard}>
             {items.map((x, i) => (
               <li
@@ -68,27 +82,29 @@ export default function AdminExceptionsPage() {
                 className={`${groupedRow} ${i < items.length - 1 ? "border-b border-[var(--separator)]" : ""}`}
               >
                 <p className="font-semibold text-[var(--foreground)]">
-                  {x.attendance.employee.name} · {x.attendance.type}
+                  {x.attendance.employee.name} · {typeLabel(x.attendance.type)}
                   {x.attendance.site?.name ? ` · ${x.attendance.site.name}` : ""}
                 </p>
                 <p className={`mt-1 ${hint}`}>
-                  {new Date(x.attendance.timestamp).toLocaleString("ko-KR")}
+                  {new Date(x.attendance.timestamp).toLocaleString(dateLocale)}
                 </p>
-                <p className="mt-2 text-[0.9375rem] text-[var(--foreground)]">사유: {x.reason}</p>
+                <p className="mt-2 text-[0.9375rem] text-[var(--foreground)]">
+                  {t("admin.exceptionsReasonLabel")}: {x.reason}
+                </p>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <button
                     type="button"
                     className={btnSuccess}
                     onClick={() => void resolve(x.id, "approve")}
                   >
-                    승인
+                    {t("admin.exceptionsApprove")}
                   </button>
                   <button
                     type="button"
                     className={btnSecondary}
                     onClick={() => void resolve(x.id, "reject")}
                   >
-                    반려
+                    {t("admin.exceptionsReject")}
                   </button>
                 </div>
               </li>
