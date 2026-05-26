@@ -31,7 +31,7 @@ import {
   tdStatusLg,
   thLg,
 } from "@/lib/uiStyles";
-import { roleBadge, statusBadge } from "@/lib/statusBadge";
+import { statusBadge } from "@/lib/statusBadge";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -73,6 +73,8 @@ export default function SuperCompanyUsersPage() {
   const [nameDraft, setNameDraft] = useState<Record<string, string>>({});
   const [savingNameId, setSavingNameId] = useState<string | null>(null);
   const [nameError, setNameError] = useState<string | null>(null);
+  const [savingRoleId, setSavingRoleId] = useState<string | null>(null);
+  const [roleError, setRoleError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [tab, setTab] = useState<"users" | "dashboard" | "stats">("users");
@@ -176,6 +178,37 @@ export default function SuperCompanyUsersPage() {
         row.id === u.id ? { ...row, employee: { ...row.employee!, name: j.employee?.name ?? next } } : row
       )
     );
+  }
+
+  async function changeRole(u: RowUser, nextRole: (typeof ADD_ROLES)[number]) {
+    if (nextRole === u.role) return;
+    setRoleError(null);
+    setSavingRoleId(u.id);
+    const prevRole = u.role;
+    // 낙관적 갱신
+    setUsers((prev) =>
+      prev.map((row) => (row.id === u.id ? { ...row, role: nextRole } : row))
+    );
+    const r = await fetch(`/api/super/companies/${id}/users/${u.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: nextRole }),
+    });
+    const j = await r.json().catch(() => ({}));
+    setSavingRoleId(null);
+    if (!r.ok) {
+      setRoleError(typeof j.error === "string" ? j.error : t("super.saveRoleFail"));
+      // 롤백
+      setUsers((prev) =>
+        prev.map((row) => (row.id === u.id ? { ...row, role: prevRole } : row))
+      );
+      return;
+    }
+    if (j.user?.role) {
+      setUsers((prev) =>
+        prev.map((row) => (row.id === u.id ? { ...row, role: j.user.role } : row))
+      );
+    }
   }
 
   async function deleteUser(u: RowUser) {
@@ -359,6 +392,7 @@ export default function SuperCompanyUsersPage() {
       <section>
         <p className={sectionLabelLg}>{t("super.userListTitle")}</p>
         {nameError && <p className={`mb-3 ${errorText}`}>{nameError}</p>}
+        {roleError && <p className={`mb-3 ${errorText}`}>{roleError}</p>}
         {deleteError && <p className={`mb-3 ${errorText}`}>{deleteError}</p>}
         <div className={tableWrapLg}>
           <table className={tableLg}>
@@ -417,7 +451,28 @@ export default function SuperCompanyUsersPage() {
                       )}
                     </td>
                     <td className={tdStatusLg}>
-                      <span className={roleBadge(u.role)}>{roleLabel(u.role)}</span>
+                      <label className="sr-only" htmlFor={`super-user-role-${u.id}`}>
+                        {t("super.listRole")}
+                      </label>
+                      <select
+                        id={`super-user-role-${u.id}`}
+                        className={`${selectLg} !py-1.5 text-[0.8125rem]`}
+                        value={u.role}
+                        onChange={(e) =>
+                          void changeRole(
+                            u,
+                            e.target.value as (typeof ADD_ROLES)[number]
+                          )
+                        }
+                        disabled={savingRoleId === u.id}
+                        aria-busy={savingRoleId === u.id}
+                      >
+                        {ADD_ROLES.map((r) => (
+                          <option key={r} value={r}>
+                            {roleLabel(r)}
+                          </option>
+                        ))}
+                      </select>
                     </td>
                     <td className={tdStatusLg}>
                       <span className={statusBadge(u.consentGivenAt ? "APPROVED" : "PENDING")}>

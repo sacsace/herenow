@@ -1,11 +1,23 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { Role } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-const patchSchema = z.object({
-  name: z.string().min(1).max(120),
-});
+/**
+ * 회사 소속 사용자에게 할당 가능한 역할만 허용한다.
+ * SUPER_ADMIN 은 companyId 가 null 이어야 하므로 여기선 명시적으로 제외.
+ */
+const COMPANY_ROLES = ["COMPANY_ADMIN", "HR_MANAGER", "APPROVER", "EMPLOYEE"] as const;
+
+const patchSchema = z
+  .object({
+    name: z.string().min(1).max(120).optional(),
+    role: z.enum(COMPANY_ROLES).optional(),
+  })
+  .refine((d) => d.name !== undefined || d.role !== undefined, {
+    message: "Provide at least one field to update",
+  });
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string; userId: string }> }) {
   const session = await auth();
@@ -28,23 +40,64 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string; u
 
   const user = await prisma.user.findFirst({
     where: { id: userId, companyId },
-    select: { id: true, employee: { select: { id: true } } },
+    select: { id: true, role: true, employee: { select: { id: true, name: true } } },
   });
   if (!user) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  if (!user.employee) {
+
+  // 표시 이름 업데이트는 Employee 레코드가 있어야 함
+  if (parsed.data.name !== undefined && !user.employee) {
     return NextResponse.json({ error: "Employee record not found" }, { status: 404 });
   }
 
-  const name = parsed.data.name.trim();
-  const employee = await prisma.employee.update({
-    where: { id: user.employee.id },
-    data: { name },
-    select: { id: true, name: true },
-  });
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      let updatedRole = user.role;
+      if (parsed.data.role !== undefined && parsed.data.role !== user.role) {
+        const updated = await tx.user.update({
+          where: { id: user.id },
+          data: { role: parsed.data.role as Role },
+          select: { role: true },
+        });
+        updatedRole = updated.role;
+        await tx.approvalLog.create({
+          data: {
+            companyId,
+            approverId: session.user.id,
+            action: "USER_ROLE_CHANGE",
+            targetType: "User",
+            targetId: user.id,
+          },
+        });
+      }
 
-  return NextResponse.json({ employee });
+      let updatedName = user.employee?.name ?? null;
+      if (parsed.data.name !== undefined && user.employee) {
+        const next = parsed.data.name.trim();
+        if (next && next !== user.employee.name) {
+          const updated = await tx.employee.update({
+            where: { id: user.employee.id },
+            data: { name: next },
+            select: { name: true },
+          });
+          updatedName = updated.name;
+        }
+      }
+
+      return { updatedRole, updatedName };
+    });
+
+    return NextResponse.json({
+      employee: user.employee
+        ? { id: user.employee.id, name: result.updatedName ?? user.employee.name }
+        : null,
+      user: { id: user.id, role: result.updatedRole },
+    });
+  } catch (e) {
+    console.error("[super users PATCH]", e);
+    return NextResponse.json({ error: "Update failed" }, { status: 500 });
+  }
 }
 
 export async function DELETE(
