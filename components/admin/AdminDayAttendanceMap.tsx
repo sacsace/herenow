@@ -194,7 +194,7 @@ export function AdminDayAttendanceMap({ date, companyId, className }: Props) {
           </p>
           <div
             ref={mapContainerRef}
-            className={`z-0 h-[min(28rem,50vh)] w-full min-h-[16rem] rounded-2xl bg-[var(--fill-tertiary)] ring-1 ring-black/[0.04] ${mapInitError ? "hidden" : ""}`}
+            className={`z-0 h-[min(36rem,65vh)] w-full min-h-[21rem] rounded-2xl bg-[var(--fill-tertiary)] ring-1 ring-black/[0.04] ${mapInitError ? "hidden" : ""}`}
             aria-label={t("admin.monthlyMapTitle")}
           />
           <ul className="mt-3 grid gap-2 sm:grid-cols-2">

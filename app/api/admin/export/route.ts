@@ -1,5 +1,9 @@
 import { auth } from "@/auth";
-import { aggregateAttendanceByDay, filterAttendanceDayRows } from "@/lib/adminAttendanceByDay";
+import {
+  aggregateAttendanceByDay,
+  filterAttendanceDayRows,
+  type AttendancePunchSummary,
+} from "@/lib/adminAttendanceByDay";
 import { prisma } from "@/lib/prisma";
 import ExcelJS from "exceljs";
 import { NextResponse } from "next/server";
@@ -76,24 +80,43 @@ export async function GET(req: Request) {
   );
 
   type Row = Record<string, string | number>;
+  /**
+   * 위치 표기 우선순위:
+   * 1) 출장 — 입력한 출장지명 사용
+   * 2) 등록된 회사 사이트 — 사이트명 사용 (`site.name`)
+   * 3) 미등록 — "위도,경도" 좌표 표기
+   */
+  function locationCell(p: AttendancePunchSummary | null | undefined): string {
+    if (!p) return "";
+    if (p.isBusinessTrip && p.businessTripLocation) return p.businessTripLocation;
+    if (p.site?.name) return p.site.name;
+    return `${p.latitude},${p.longitude}`;
+  }
+
+  /** 초과근무 시간을 "X시간 Y분" 으로 사람 친화적 포맷 */
+  function durationText(min: number): string {
+    if (!min || min <= 0) return "";
+    if (min < 60) return `${min}분`;
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return m === 0 ? `${h}시간` : `${h}시간 ${m}분`;
+  }
+
   const sheetData: Row[] = days.map((d) => ({
     날짜: d.date,
     직원: d.employeeName,
     출근시각: d.checkIn?.time ?? "",
     퇴근시각: d.checkOut?.time ?? "",
-    출근위도: d.checkIn?.latitude ?? "",
-    출근경도: d.checkIn?.longitude ?? "",
-    퇴근위도: d.checkOut?.latitude ?? "",
-    퇴근경도: d.checkOut?.longitude ?? "",
+    출근위치: locationCell(d.checkIn),
+    퇴근위치: locationCell(d.checkOut),
     미완료: d.incomplete ? "Y" : "",
     상태: d.status,
     지각: d.isLate ? "Y" : "",
     조퇴: d.isEarlyLeave ? "Y" : "",
     초과근무: d.isOvertime ? "Y" : "",
-    초과분: d.overtimeMinutes > 0 ? d.overtimeMinutes : "",
+    초과시간: durationText(d.overtimeMinutes),
     휴일근무: d.isHolidayWork ? "Y" : "",
     출장: d.checkIn?.isBusinessTrip ? "Y" : "",
-    출장지역: d.checkIn?.businessTripLocation ?? "",
     출장사유: d.checkIn?.businessTripReason ?? "",
     출근메모: d.checkIn?.memo ?? "",
     퇴근메모: d.checkOut?.memo ?? "",
@@ -107,19 +130,16 @@ export async function GET(req: Request) {
           "직원",
           "출근시각",
           "퇴근시각",
-          "출근위도",
-          "출근경도",
-          "퇴근위도",
-          "퇴근경도",
+          "출근위치",
+          "퇴근위치",
           "미완료",
           "상태",
           "지각",
           "조퇴",
           "초과근무",
-          "초과분",
+          "초과시간",
           "휴일근무",
           "출장",
-          "출장지역",
           "출장사유",
           "출근메모",
           "퇴근메모",

@@ -50,8 +50,10 @@ export function StaticMap({ lat, lng, label, className, noKeyFallback = "link" }
         target="_blank"
         rel="noreferrer"
         className={`text-[0.8125rem] ${link} ${className ?? ""}`}
+        aria-label={label ?? t("common.mapOpenLink")}
+        title={label ?? undefined}
       >
-        {t("common.mapOpenLink")} ({label ?? t("common.mapEmbedTitle")})
+        {t("common.mapOpenLink")}
       </a>
     );
   }
