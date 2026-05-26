@@ -2,6 +2,7 @@
 
 import { AdminDayAttendanceMap } from "@/components/admin/AdminDayAttendanceMap";
 import { AttendanceByEmployeeView } from "@/components/admin/attendance/ByEmployeeView";
+import { CalendarDayDetailModal } from "@/components/admin/attendance/CalendarDayDetailModal";
 import { AttendanceCalendarView } from "@/components/admin/attendance/CalendarView";
 import { AttendanceChartView } from "@/components/admin/attendance/ChartView";
 import { AttendanceDayTable } from "@/components/admin/attendance/DayTable";
@@ -115,6 +116,7 @@ export default function AdminAttendancePage() {
   });
 
   const [departments, setDepartments] = useState<DepartmentLite[]>([]);
+  const [calendarDetailDate, setCalendarDetailDate] = useState<string | null>(null);
 
   const dateLocale = locale === "en" ? "en-US" : "ko-KR";
 
@@ -442,6 +444,7 @@ export default function AdminAttendancePage() {
           onPrevMonth={() => gotoMonth(-1)}
           onNextMonth={() => gotoMonth(1)}
           onToday={gotoToday}
+          onPickDay={(d) => setCalendarDetailDate(d)}
         />
       ) : tab === "chart" ? (
         rows.length === 0 ? (
@@ -468,6 +471,14 @@ export default function AdminAttendancePage() {
       ) : (
         <AttendanceDayTable rows={displayRows} dateLocale={dateLocale} />
       )}
+
+      <CalendarDayDetailModal
+        open={calendarDetailDate !== null}
+        onClose={() => setCalendarDetailDate(null)}
+        date={calendarDetailDate}
+        rows={rows}
+        dateLocale={dateLocale}
+      />
     </div>
   );
 }

@@ -282,6 +282,10 @@ export const ko = {
     attendanceCalendarLegendIssue: "지각·조퇴",
     attendanceCalendarLegendIncomplete: "미완료",
     attendanceCalendarLegendOvertime: "초과·휴일",
+    attendanceCalendarDetailLead:
+      "출퇴근 {count}건 · 직원 {employees}명",
+    attendanceCalendarDetailUnderHours: "9시간 미달 {n}",
+    attendanceCalendarDetailClose: "닫기",
     attendanceFilterAll: "전체 상태",
     attendanceFilterStatus: "승인 상태",
     attendanceFilterDepartment: "부서",
@@ -898,6 +902,10 @@ export const en = {
     attendanceCalendarLegendIssue: "Late / early",
     attendanceCalendarLegendIncomplete: "Incomplete",
     attendanceCalendarLegendOvertime: "Overtime / holiday",
+    attendanceCalendarDetailLead:
+      "{count} record(s) · {employees} employee(s)",
+    attendanceCalendarDetailUnderHours: "Under 9h: {n}",
+    attendanceCalendarDetailClose: "Close",
     attendanceFilterAll: "All statuses",
     attendanceFilterStatus: "Status",
     attendanceFilterDepartment: "Department",
