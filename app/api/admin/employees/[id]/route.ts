@@ -4,7 +4,7 @@ import { normalizeWorkScheduleByDay } from "@/lib/companyWorkSchedule";
 import { prisma } from "@/lib/prisma";
 import { isShiftCode } from "@/lib/employeeWorkSchedule";
 import { canAssignRole, canDeleteEmployee } from "@/lib/roleHierarchy";
-import { Role } from "@prisma/client";
+import { Prisma, Role } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -145,13 +145,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
   const wantsPasswordChange = parsed.data.password !== undefined;
 
-  const schedulePatch: {
-    workScheduleType?: string;
-    shiftCode?: string | null;
-    workStartTime?: string | null;
-    workEndTime?: string | null;
-    workScheduleByDay?: unknown;
-  } = {};
+  const schedulePatch: Prisma.EmployeeUpdateInput = {};
 
   if (parsed.data.workScheduleType !== undefined) {
     schedulePatch.workScheduleType = parsed.data.workScheduleType;
@@ -159,7 +153,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       schedulePatch.shiftCode = null;
       schedulePatch.workStartTime = null;
       schedulePatch.workEndTime = null;
-      schedulePatch.workScheduleByDay = null;
+      schedulePatch.workScheduleByDay = Prisma.JsonNull;
     } else if (parsed.data.workScheduleType === "SHIFT") {
       const code = parsed.data.shiftCode;
       if (!code || !isShiftCode(code)) {
@@ -168,7 +162,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       schedulePatch.shiftCode = code;
       schedulePatch.workStartTime = null;
       schedulePatch.workEndTime = null;
-      schedulePatch.workScheduleByDay = null;
+      schedulePatch.workScheduleByDay = Prisma.JsonNull;
     } else if (parsed.data.workScheduleType === "CUSTOM") {
       schedulePatch.shiftCode = null;
       if (parsed.data.workStartTime !== undefined) {
@@ -178,10 +172,10 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         schedulePatch.workEndTime = parsed.data.workEndTime;
       }
       if (parsed.data.workScheduleByDay !== undefined) {
-        const normalized = parsed.data.workScheduleByDay
-          ? normalizeWorkScheduleByDay(parsed.data.workScheduleByDay)
-          : null;
-        schedulePatch.workScheduleByDay = normalized;
+        schedulePatch.workScheduleByDay =
+          parsed.data.workScheduleByDay === null
+            ? Prisma.JsonNull
+            : (normalizeWorkScheduleByDay(parsed.data.workScheduleByDay) as Prisma.InputJsonValue);
       }
     }
   } else if (parsed.data.shiftCode !== undefined) {
@@ -191,17 +185,22 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     schedulePatch.shiftCode = parsed.data.shiftCode;
   }
 
+  const employeeData: Prisma.EmployeeUpdateInput = {
+    ...schedulePatch,
+    ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+  };
+
+  if (parsed.data.departmentId !== undefined) {
+    employeeData.department = parsed.data.departmentId
+      ? { connect: { id: parsed.data.departmentId } }
+      : { disconnect: true };
+  }
+
   try {
     const result = await prisma.$transaction(async (tx) => {
       const employee = await tx.employee.update({
         where: { id },
-        data: {
-          ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
-          ...(parsed.data.departmentId !== undefined
-            ? { departmentId: parsed.data.departmentId }
-            : {}),
-          ...schedulePatch,
-        },
+        data: employeeData,
         include: {
           user: { select: { id: true, email: true, role: true } },
           department: { select: { id: true, name: true } },

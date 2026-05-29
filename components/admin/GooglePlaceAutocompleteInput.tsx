@@ -56,7 +56,8 @@ export function GooglePlaceAutocompleteInput({
 
   useEffect(() => {
     if (!mapsKey || disabled) return;
-    if (!inputRef.current) return;
+    const inputEl = inputRef.current;
+    if (!inputEl) return;
 
     let cancelled = false;
 
@@ -99,8 +100,8 @@ export function GooglePlaceAutocompleteInput({
     return () => {
       cancelled = true;
       const g = (window as Window & { google?: { maps?: { event?: { clearInstanceListeners: (i: unknown) => void } } } }).google;
-      if (inputRef.current && g?.maps?.event?.clearInstanceListeners) {
-        g.maps.event.clearInstanceListeners(inputRef.current);
+      if (inputEl && g?.maps?.event?.clearInstanceListeners) {
+        g.maps.event.clearInstanceListeners(inputEl);
       }
       autocompleteRef.current = null;
       setReady(false);

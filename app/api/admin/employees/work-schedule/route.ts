@@ -1,7 +1,7 @@
 import { auth } from "@/auth";
-import { normalizeWorkScheduleByDay } from "@/lib/companyWorkSchedule";
 import { isShiftCode } from "@/lib/employeeWorkSchedule";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -64,14 +64,14 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: "INVALID_EMPLOYEES" }, { status: 400 });
   }
 
-  const data =
+  const data: Prisma.EmployeeUpdateManyMutationInput =
     workScheduleType === "COMPANY"
       ? {
           workScheduleType: "COMPANY",
           shiftCode: null,
           workStartTime: null,
           workEndTime: null,
-          workScheduleByDay: null,
+          workScheduleByDay: Prisma.JsonNull,
         }
       : workScheduleType === "SHIFT"
         ? {
@@ -79,14 +79,14 @@ export async function PATCH(req: Request) {
             shiftCode: shiftCode!,
             workStartTime: null,
             workEndTime: null,
-            workScheduleByDay: null,
+            workScheduleByDay: Prisma.JsonNull,
           }
         : {
             workScheduleType: "CUSTOM",
             shiftCode: null,
             workStartTime: workStartTime!,
             workEndTime: workEndTime!,
-            workScheduleByDay: null,
+            workScheduleByDay: Prisma.JsonNull,
           };
 
   const result = await prisma.employee.updateMany({

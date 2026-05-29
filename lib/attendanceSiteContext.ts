@@ -2,7 +2,6 @@ import {
   filterSitesForEmployee,
   pickNearestSite,
   type CompanySite,
-  type SiteWithDepartments,
 } from "@/lib/siteGeofence";
 import type { SiteScheduleFields } from "@/lib/siteWorkSchedule";
 
