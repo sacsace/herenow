@@ -1,5 +1,6 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { normalizeShiftPresets } from "@/lib/shiftPresets";
 import { canAssignRole } from "@/lib/roleHierarchy";
 import { Role } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -38,15 +39,38 @@ export async function GET(req: Request) {
   }
 
   try {
-    const employees = await prisma.employee.findMany({
-      where: { companyId },
-      orderBy: { name: "asc" },
-      include: {
-        user: { select: { id: true, email: true, role: true } },
-        department: { select: { id: true, name: true } },
-      },
-    });
-    return NextResponse.json({ employees });
+    const [company, employees] = await Promise.all([
+      prisma.company.findUnique({
+        where: { id: companyId },
+        select: {
+          workStartTime: true,
+          workEndTime: true,
+          workDays: true,
+          workScheduleByDay: true,
+          shiftPresets: true,
+        },
+      }),
+      prisma.employee.findMany({
+        where: { companyId },
+        orderBy: { name: "asc" },
+        include: {
+          user: { select: { id: true, email: true, role: true } },
+          department: { select: { id: true, name: true } },
+        },
+      }),
+    ]);
+    if (!company) {
+      return NextResponse.json({ error: "Company not found" }, { status: 404 });
+    }
+    const companySchedule = {
+      workStartTime: company.workStartTime,
+      workEndTime: company.workEndTime,
+      workDays: company.workDays,
+      workScheduleByDay: company.workScheduleByDay,
+      shiftPresets: company.shiftPresets,
+    };
+    const shiftPresets = normalizeShiftPresets(company.shiftPresets);
+    return NextResponse.json({ employees, shiftPresets, companySchedule });
   } catch (e) {
     console.error("[employees GET]", e);
     const message = e instanceof Error ? e.message : "Internal error";

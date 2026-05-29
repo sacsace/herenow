@@ -9,6 +9,7 @@ export type AttendancePunchSummary = {
   latitude: number;
   longitude: number;
   distanceFromSite: number;
+  outsideGeofence: boolean;
   status: AttendanceStatus;
   isLate: boolean;
   isEarlyLeave: boolean;
@@ -52,6 +53,7 @@ type RecordInput = {
   latitude: number;
   longitude: number;
   distanceFromSite: number;
+  outsideGeofence: boolean;
   status: AttendanceStatus;
   isLate: boolean;
   isEarlyLeave: boolean;
@@ -76,6 +78,7 @@ function toPunchSummary(r: RecordInput, timeZone: string): AttendancePunchSummar
     latitude: r.latitude,
     longitude: r.longitude,
     distanceFromSite: r.distanceFromSite,
+    outsideGeofence: r.outsideGeofence,
     status: r.status,
     isLate: r.isLate,
     isEarlyLeave: r.isEarlyLeave,

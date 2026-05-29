@@ -1,3 +1,11 @@
+/* Google Places Autocomplete 드롭다운 — 모달·카드 위에 표시 */
+.pac-container {
+  z-index: 10050 !important;
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  font-family: inherit;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

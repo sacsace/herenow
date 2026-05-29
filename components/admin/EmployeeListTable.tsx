@@ -12,6 +12,11 @@ export type EmployeeRow = {
   name: string;
   user: { id: string; email: string; role: string };
   department: { id: string; name: string } | null;
+  scheduleSummary?: string;
+  workScheduleType?: string | null;
+  shiftCode?: string | null;
+  workStartTime?: string | null;
+  workEndTime?: string | null;
 };
 
 const rowControl =
@@ -101,6 +106,11 @@ type Props = {
   onDelete: (emp: EmployeeRow) => void;
   deleteDisabledReason: (emp: EmployeeRow, isSelf: boolean) => string | undefined;
   roleLabel: (role: string) => string;
+  canEditSchedule?: boolean;
+  onEditSchedule?: (emp: EmployeeRow) => void;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (id: string) => void;
+  onToggleSelectAll?: () => void;
 };
 
 export function EmployeeListTable({
@@ -125,6 +135,11 @@ export function EmployeeListTable({
   onDelete,
   deleteDisabledReason,
   roleLabel,
+  canEditSchedule = false,
+  onEditSchedule,
+  selectedIds,
+  onToggleSelect,
+  onToggleSelectAll,
 }: Props) {
   const { t, locale } = useI18n();
   const dl = locale === "en" ? "en-US" : "ko-KR";
@@ -267,13 +282,20 @@ export function EmployeeListTable({
     return <p className={emptyStateCompact}>{t("admin.employeesEmpty")}</p>;
   }
 
+  const showSelect = Boolean(onToggleSelect && selectedIds);
+  const scheduleColWidth = 168;
+  const selectColWidth = 40;
   const tableWidth =
+    (showSelect ? selectColWidth : 0) +
     widths.name +
     widths.email +
     widths.password +
     widths.role +
     widths.department +
+    scheduleColWidth +
     widths.actions;
+  const allSelected =
+    showSelect && employees.length > 0 && employees.every((e) => selectedIds!.has(e.id));
 
   return (
     <div className={tableWrap}>
@@ -282,20 +304,35 @@ export function EmployeeListTable({
         style={{ tableLayout: "fixed", width: "100%", minWidth: tableWidth }}
       >
         <colgroup>
+          {showSelect && <col style={{ width: selectColWidth }} />}
           <col style={{ width: widths.name }} />
           <col style={{ width: widths.email }} />
           <col style={{ width: widths.password }} />
           <col style={{ width: widths.role }} />
           <col style={{ width: widths.department }} />
+          <col style={{ width: scheduleColWidth }} />
           <col style={{ width: widths.actions }} />
         </colgroup>
         <thead className={tableHead}>
           <tr>
+            {showSelect && (
+              <th className={th} style={{ width: selectColWidth }}>
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={() => onToggleSelectAll?.()}
+                  aria-label={t("admin.empScheduleSelectAll")}
+                />
+              </th>
+            )}
             {headerCell("name", t("admin.employeesNameLabel"), true)}
             {headerCell("email", t("admin.employeesEmailLabel"), true)}
             {headerCell("password", t("admin.employeesPasswordColLabel"), true)}
             {headerCell("role", t("admin.employeesRoleLabel"), true)}
             {headerCell("department", t("admin.employeesDepartmentLabel"), true)}
+            <th className={th} style={{ width: scheduleColWidth }}>
+              {t("admin.empScheduleCol")}
+            </th>
             <th
               className={`${th} text-right`}
               style={{ width: widths.actions, minWidth: MIN_WIDTHS.actions }}
@@ -319,6 +356,17 @@ export function EmployeeListTable({
 
             return (
               <tr key={e.id} className={trDivider}>
+                {showSelect && (
+                  <td className={`${td} align-middle`}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds!.has(e.id)}
+                      onChange={() => onToggleSelect?.(e.id)}
+                      disabled={isBusy}
+                      aria-label={t("admin.empScheduleSelectRow").replace("{name}", e.name)}
+                    />
+                  </td>
+                )}
                 <td className={`${td} align-middle`}>
                   {canEditProfile ? (
                     <input
@@ -439,6 +487,21 @@ export function EmployeeListTable({
                       </option>
                     ))}
                   </select>
+                </td>
+                <td className={`${td} align-middle`}>
+                  <p className="truncate text-[0.75rem] text-[var(--apple-label-secondary)]">
+                    {e.scheduleSummary ?? "—"}
+                  </p>
+                  {canEditSchedule && onEditSchedule && (
+                    <button
+                      type="button"
+                      className="mt-1 text-[0.75rem] font-medium text-[var(--apple-blue)] hover:underline"
+                      disabled={isBusy}
+                      onClick={() => onEditSchedule(e)}
+                    >
+                      {t("admin.empScheduleEdit")}
+                    </button>
+                  )}
                 </td>
                 <td className={`${td} align-middle text-right`}>
                   {canEditProfile ? (

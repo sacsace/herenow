@@ -1,6 +1,10 @@
 import { auth } from "@/auth";
+import { mapSiteRow, resolvePunchSiteContext } from "@/lib/attendanceSiteContext";
 import { prisma } from "@/lib/prisma";
-import { computeDistanceFromSite } from "@/lib/siteGeofence";
+import {
+  isWithinSiteRadius,
+  parseGeofenceMode,
+} from "@/lib/siteGeofence";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -34,16 +38,42 @@ export async function PATCH(
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
 
-    const record = await prisma.attendanceRecord.findFirst({
-      where: {
-        id,
-        companyId: session.user.companyId,
-        employeeId: session.user.employeeId,
-      },
-      select: { id: true, timestamp: true, type: true, isBusinessTrip: true },
-    });
+    const [record, employee, company, sites] = await Promise.all([
+      prisma.attendanceRecord.findFirst({
+        where: {
+          id,
+          companyId: session.user.companyId,
+          employeeId: session.user.employeeId,
+        },
+        select: { id: true, timestamp: true, type: true, isBusinessTrip: true },
+      }),
+      prisma.employee.findFirst({
+        where: { id: session.user.employeeId, companyId: session.user.companyId },
+        select: { departmentId: true },
+      }),
+      prisma.company.findUnique({
+        where: { id: session.user.companyId },
+        select: { geofenceMode: true },
+      }),
+      prisma.site.findMany({
+        where: { companyId: session.user.companyId },
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          name: true,
+          latitude: true,
+          longitude: true,
+          allowedRadius: true,
+          workScheduleMode: true,
+          shiftCode: true,
+          workStartTime: true,
+          workEndTime: true,
+          departments: { select: { departmentId: true } },
+        },
+      }),
+    ]);
 
-    if (!record) {
+    if (!record || !employee || !company) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
@@ -53,29 +83,27 @@ export async function PATCH(
     }
 
     const { latitude, longitude, accuracy } = parsed.data;
+    const skipSiteLink = record.type === "CHECK_IN" && record.isBusinessTrip;
+    const siteCtx = resolvePunchSiteContext(
+      sites.map(mapSiteRow),
+      employee.departmentId,
+      latitude,
+      longitude,
+      skipSiteLink
+    );
 
-    const site = await prisma.site.findFirst({
-      where: { companyId: session.user.companyId },
-      orderBy: { createdAt: "asc" },
-      select: {
-        id: true,
-        latitude: true,
-        longitude: true,
-        allowedRadius: true,
-      },
-    });
-
-    let distanceFromSite = 0;
-    const siteRelation =
-      site && !(record.type === "CHECK_IN" && record.isBusinessTrip)
-        ? { site: { connect: { id: site.id } } }
-        : record.type === "CHECK_IN" && record.isBusinessTrip
-          ? { site: { disconnect: true } }
-          : {};
-
-    if (site) {
-      distanceFromSite = computeDistanceFromSite(site, latitude, longitude);
+    const geofenceMode = parseGeofenceMode(company.geofenceMode);
+    let outsideGeofence = false;
+    if (!skipSiteLink && siteCtx.nearestSite && geofenceMode !== "OFF") {
+      const radiusCheck = isWithinSiteRadius(siteCtx.nearestSite, latitude, longitude);
+      outsideGeofence = !radiusCheck.ok;
     }
+
+    const siteRelation = siteCtx.siteId
+      ? { site: { connect: { id: siteCtx.siteId } } }
+      : skipSiteLink
+        ? { site: { disconnect: true } }
+        : {};
 
     const updated = await prisma.attendanceRecord.update({
       where: { id: record.id },
@@ -83,7 +111,8 @@ export async function PATCH(
         latitude,
         longitude,
         accuracy: accuracy ?? null,
-        distanceFromSite,
+        distanceFromSite: siteCtx.distanceFromSite,
+        outsideGeofence,
         ...siteRelation,
       },
       select: {
@@ -91,6 +120,7 @@ export async function PATCH(
         latitude: true,
         longitude: true,
         distanceFromSite: true,
+        outsideGeofence: true,
       },
     });
 

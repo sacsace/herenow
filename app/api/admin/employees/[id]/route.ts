@@ -1,5 +1,8 @@
 import { auth } from "@/auth";
+import { employeeScheduleSummary } from "@/lib/employeeWorkSchedule";
+import { normalizeWorkScheduleByDay } from "@/lib/companyWorkSchedule";
 import { prisma } from "@/lib/prisma";
+import { isShiftCode } from "@/lib/employeeWorkSchedule";
 import { canAssignRole, canDeleteEmployee } from "@/lib/roleHierarchy";
 import { Role } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -31,6 +34,28 @@ const patchSchema = z.object({
   email: z.string().email().transform((e) => e.toLowerCase().trim()).optional(),
   password: z.string().min(8).max(200).optional(),
   role: z.enum(COMPANY_ROLES).optional(),
+  workScheduleType: z.enum(["COMPANY", "SHIFT", "CUSTOM"]).optional(),
+  shiftCode: z.enum(["A", "B", "C"]).nullable().optional(),
+  workStartTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .nullable()
+    .optional(),
+  workEndTime: z
+    .string()
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/)
+    .nullable()
+    .optional(),
+  workScheduleByDay: z
+    .record(
+      z.string().regex(/^[0-6]$/),
+      z.object({
+        workStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+        workEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+      })
+    )
+    .nullable()
+    .optional(),
 });
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -120,6 +145,52 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
 
   const wantsPasswordChange = parsed.data.password !== undefined;
 
+  const schedulePatch: {
+    workScheduleType?: string;
+    shiftCode?: string | null;
+    workStartTime?: string | null;
+    workEndTime?: string | null;
+    workScheduleByDay?: unknown;
+  } = {};
+
+  if (parsed.data.workScheduleType !== undefined) {
+    schedulePatch.workScheduleType = parsed.data.workScheduleType;
+    if (parsed.data.workScheduleType === "COMPANY") {
+      schedulePatch.shiftCode = null;
+      schedulePatch.workStartTime = null;
+      schedulePatch.workEndTime = null;
+      schedulePatch.workScheduleByDay = null;
+    } else if (parsed.data.workScheduleType === "SHIFT") {
+      const code = parsed.data.shiftCode;
+      if (!code || !isShiftCode(code)) {
+        return NextResponse.json({ error: "SHIFT_CODE_REQUIRED" }, { status: 400 });
+      }
+      schedulePatch.shiftCode = code;
+      schedulePatch.workStartTime = null;
+      schedulePatch.workEndTime = null;
+      schedulePatch.workScheduleByDay = null;
+    } else if (parsed.data.workScheduleType === "CUSTOM") {
+      schedulePatch.shiftCode = null;
+      if (parsed.data.workStartTime !== undefined) {
+        schedulePatch.workStartTime = parsed.data.workStartTime;
+      }
+      if (parsed.data.workEndTime !== undefined) {
+        schedulePatch.workEndTime = parsed.data.workEndTime;
+      }
+      if (parsed.data.workScheduleByDay !== undefined) {
+        const normalized = parsed.data.workScheduleByDay
+          ? normalizeWorkScheduleByDay(parsed.data.workScheduleByDay)
+          : null;
+        schedulePatch.workScheduleByDay = normalized;
+      }
+    }
+  } else if (parsed.data.shiftCode !== undefined) {
+    if (parsed.data.shiftCode && !isShiftCode(parsed.data.shiftCode)) {
+      return NextResponse.json({ error: "INVALID_SHIFT_CODE" }, { status: 400 });
+    }
+    schedulePatch.shiftCode = parsed.data.shiftCode;
+  }
+
   try {
     const result = await prisma.$transaction(async (tx) => {
       const employee = await tx.employee.update({
@@ -129,6 +200,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
           ...(parsed.data.departmentId !== undefined
             ? { departmentId: parsed.data.departmentId }
             : {}),
+          ...schedulePatch,
         },
         include: {
           user: { select: { id: true, email: true, role: true } },
@@ -190,9 +262,24 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         });
       }
 
+      const company = await tx.company.findUnique({
+        where: { id: resolved.companyId },
+        select: {
+          workStartTime: true,
+          workEndTime: true,
+          workDays: true,
+          workScheduleByDay: true,
+          shiftPresets: true,
+        },
+      });
+      const scheduleSummary = company
+        ? employeeScheduleSummary(employee, company, "ko").label
+        : "";
+
       return {
         ...employee,
         user: { ...employee.user, email: userEmail, role: userRole },
+        scheduleSummary,
       };
     });
 

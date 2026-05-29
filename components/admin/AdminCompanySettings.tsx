@@ -2,7 +2,14 @@
 
 import { useI18n } from "@/components/LanguageProvider";
 import { LocaleTimeInput } from "@/components/LocaleTimeInput";
-import { weekdayShortLabel } from "@/lib/companyWorkSchedule";
+import { normalizeWorkScheduleByDay, weekdayShortLabel } from "@/lib/companyWorkSchedule";
+import {
+  DEFAULT_SHIFT_PRESETS,
+  localizeShiftPresetsMap,
+  SHIFT_CODES,
+  type ShiftLocale,
+  type ShiftPresetsMap,
+} from "@/lib/shiftPresets";
 import {
   DEFAULT_COMPANY_TIMEZONE,
   formatTimezoneOptionLabel,
@@ -23,12 +30,35 @@ import { useCallback, useEffect, useState } from "react";
 
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0] as const;
 
+type DayTimeState = { workStartTime: string; workEndTime: string };
+type WorkScheduleByDayState = Partial<Record<number, DayTimeState>>;
+
+function buildDayScheduleState(
+  fallbackStart: string,
+  fallbackEnd: string,
+  raw?: unknown
+): WorkScheduleByDayState {
+  const normalized = normalizeWorkScheduleByDay(raw);
+  const out: WorkScheduleByDayState = {};
+  for (const day of WEEKDAYS) {
+    const v = normalized[day];
+    out[day] = {
+      workStartTime: v?.workStartTime ?? fallbackStart,
+      workEndTime: v?.workEndTime ?? fallbackEnd,
+    };
+  }
+  return out;
+}
+
 type Settings = {
   timezone: string;
   faceRecognitionEnabled: boolean;
+  geofenceMode: string;
   workStartTime: string | null;
   workEndTime: string | null;
   workDaysArray: number[];
+  workScheduleByDay?: unknown;
+  shiftPresets?: ShiftPresetsMap;
   canEdit: boolean;
 };
 
@@ -45,6 +75,10 @@ export function AdminCompanySettings({ companyId }: Props = {}) {
   const [workStart, setWorkStart] = useState("09:00");
   const [workEnd, setWorkEnd] = useState("18:00");
   const [workDaySet, setWorkDaySet] = useState<Set<number>>(new Set([1, 2, 3, 4, 5]));
+  const [workScheduleByDay, setWorkScheduleByDay] = useState<WorkScheduleByDayState>(
+    buildDayScheduleState("09:00", "18:00")
+  );
+  const [shiftPresets, setShiftPresets] = useState<ShiftPresetsMap>(DEFAULT_SHIFT_PRESETS);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,12 +101,15 @@ export function AdminCompanySettings({ companyId }: Props = {}) {
       workStartTime?: string | null;
       workEndTime?: string | null;
       faceRecognitionEnabled?: boolean;
+      workScheduleByDay?: unknown;
+      shiftPresets?: ShiftPresetsMap;
     };
     const tz =
       typeof s.timezone === "string" && s.timezone.trim() ? s.timezone.trim() : DEFAULT_COMPANY_TIMEZONE;
     setSettings({
       timezone: tz,
       faceRecognitionEnabled: Boolean(s.faceRecognitionEnabled),
+      geofenceMode: typeof s.geofenceMode === "string" ? s.geofenceMode : "OFF",
       workStartTime: s.workStartTime ?? "09:00",
       workEndTime: s.workEndTime ?? "18:00",
       workDaysArray: s.workDaysArray ?? [1, 2, 3, 4, 5],
@@ -82,11 +119,23 @@ export function AdminCompanySettings({ companyId }: Props = {}) {
     setWorkStart(s.workStartTime ?? "09:00");
     setWorkEnd(s.workEndTime ?? "18:00");
     setWorkDaySet(new Set(s.workDaysArray ?? [1, 2, 3, 4, 5]));
-  }, [t, qs]);
+    setWorkScheduleByDay(
+      buildDayScheduleState(s.workStartTime ?? "09:00", s.workEndTime ?? "18:00", s.workScheduleByDay)
+    );
+    const loc: ShiftLocale = locale === "en" ? "en" : "ko";
+    setShiftPresets(
+      localizeShiftPresetsMap(s.shiftPresets ?? DEFAULT_SHIFT_PRESETS, loc)
+    );
+  }, [t, qs, locale]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const loc: ShiftLocale = locale === "en" ? "en" : "ko";
+    setShiftPresets((prev) => localizeShiftPresetsMap(prev, loc));
+  }, [locale]);
 
   async function patch(body: Record<string, unknown>) {
     if (!settings?.canEdit || saving) return;
@@ -125,11 +174,42 @@ export function AdminCompanySettings({ companyId }: Props = {}) {
   }
 
   async function saveWorkSchedule() {
+    const byDay: Record<string, DayTimeState> = {};
+    for (const day of [...workDaySet].sort((a, b) => a - b)) {
+      const window = workScheduleByDay[day] ?? {
+        workStartTime: workStart,
+        workEndTime: workEnd,
+      };
+      byDay[String(day)] = {
+        workStartTime: window.workStartTime,
+        workEndTime: window.workEndTime,
+      };
+    }
     await patch({
       timezone,
       workStartTime: workStart,
       workEndTime: workEnd,
       workDays: [...workDaySet].sort((a, b) => a - b).join(","),
+      workScheduleByDay: byDay,
+      shiftPresets,
+    });
+  }
+
+  function setShiftPresetField(
+    code: (typeof SHIFT_CODES)[number],
+    key: "label" | "workStartTime" | "workEndTime",
+    value: string
+  ) {
+    setShiftPresets((prev) => ({
+      ...prev,
+      [code]: { ...prev[code], [key]: value },
+    }));
+  }
+
+  function setDayTime(day: number, key: "workStartTime" | "workEndTime", value: string) {
+    setWorkScheduleByDay((prev) => {
+      const base = prev[day] ?? { workStartTime: workStart, workEndTime: workEnd };
+      return { ...prev, [day]: { ...base, [key]: value } };
     });
   }
 
@@ -171,6 +251,23 @@ export function AdminCompanySettings({ companyId }: Props = {}) {
                   </span>
                 </span>
               </label>
+
+              <div className="rounded-xl bg-[var(--fill-tertiary)] p-4 sm:p-5">
+                <label className="block">
+                  <span className={label}>{t("admin.settingsGeofenceMode")}</span>
+                  <select
+                    className={`${select} mt-1.5 bg-[var(--fill-secondary)]`}
+                    value={settings.geofenceMode}
+                    disabled={!settings.canEdit || saving}
+                    onChange={(e) => void patch({ geofenceMode: e.target.value })}
+                  >
+                    <option value="OFF">{t("admin.settingsGeofenceOff")}</option>
+                    <option value="WARN">{t("admin.settingsGeofenceWarn")}</option>
+                    <option value="BLOCK">{t("admin.settingsGeofenceBlock")}</option>
+                  </select>
+                  <p className={`mt-1.5 ${hint}`}>{t("admin.settingsGeofenceHint")}</p>
+                </label>
+              </div>
 
               <div className="rounded-xl bg-[var(--fill-tertiary)] p-4 sm:p-5">
                 <h3 className="text-[0.9375rem] font-semibold text-[var(--foreground)]">
@@ -235,6 +332,76 @@ export function AdminCompanySettings({ companyId }: Props = {}) {
                     >
                       {weekdayShortLabel(d, locale)}
                     </button>
+                  ))}
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {WEEKDAYS.map((day) => {
+                    const dayWindow = workScheduleByDay[day] ?? {
+                      workStartTime: workStart,
+                      workEndTime: workEnd,
+                    };
+                    const active = workDaySet.has(day);
+                    return (
+                      <div
+                        key={`time-${day}`}
+                        className="grid items-center gap-2 rounded-lg bg-[var(--fill-secondary)] px-3 py-2 sm:grid-cols-[3rem_1fr_1fr]"
+                      >
+                        <span className="text-[0.8125rem] font-semibold text-[var(--foreground)]">
+                          {weekdayShortLabel(day, locale)}
+                        </span>
+                        <LocaleTimeInput
+                          value={dayWindow.workStartTime}
+                          onChange={(v) => setDayTime(day, "workStartTime", v)}
+                          disabled={!settings.canEdit || saving || !active}
+                          ariaLabel={`${weekdayShortLabel(day, locale)} ${t("admin.settingsWorkStart")}`}
+                        />
+                        <LocaleTimeInput
+                          value={dayWindow.workEndTime}
+                          onChange={(v) => setDayTime(day, "workEndTime", v)}
+                          disabled={!settings.canEdit || saving || !active}
+                          ariaLabel={`${weekdayShortLabel(day, locale)} ${t("admin.settingsWorkEnd")}`}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <p className="mt-5 text-[0.9375rem] font-semibold text-[var(--foreground)]">
+                  {t("admin.settingsShiftPresetsTitle")}
+                </p>
+                <p className="mt-1 text-[0.8125rem] text-[var(--apple-label-secondary)]">
+                  {t("admin.settingsShiftPresetsLead")}
+                </p>
+                <div className="mt-3 space-y-3">
+                  {SHIFT_CODES.map((code) => (
+                    <div
+                      key={code}
+                      className="grid gap-2 rounded-lg bg-[var(--fill-secondary)] px-3 py-3 sm:grid-cols-[4rem_1fr_1fr_1fr]"
+                    >
+                      <span className="text-[0.8125rem] font-semibold text-[var(--foreground)]">
+                        {code}
+                      </span>
+                      <input
+                        className="h-8 rounded-[0.5rem] bg-[var(--background)] px-2 text-[0.8125rem]"
+                        value={shiftPresets[code].label}
+                        onChange={(e) => setShiftPresetField(code, "label", e.target.value)}
+                        disabled={!settings.canEdit || saving}
+                        aria-label={t("admin.settingsShiftLabel")}
+                      />
+                      <LocaleTimeInput
+                        value={shiftPresets[code].workStartTime}
+                        onChange={(v) => setShiftPresetField(code, "workStartTime", v)}
+                        disabled={!settings.canEdit || saving}
+                        ariaLabel={`${code} ${t("admin.settingsWorkStart")}`}
+                      />
+                      <LocaleTimeInput
+                        value={shiftPresets[code].workEndTime}
+                        onChange={(v) => setShiftPresetField(code, "workEndTime", v)}
+                        disabled={!settings.canEdit || saving}
+                        ariaLabel={`${code} ${t("admin.settingsWorkEnd")}`}
+                      />
+                    </div>
                   ))}
                 </div>
 

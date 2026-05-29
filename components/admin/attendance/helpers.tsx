@@ -88,10 +88,19 @@ export function locationLabel(p: AttendancePunchSummary, t?: T) {
     const distanceText = t
       ? t("admin.attendanceLocationDistance").replace("{m}", String(distance))
       : `약 ${distance}m`;
+    const outsideText =
+      p.outsideGeofence && t ? (
+        <span className={`${metaCaption} text-amber-600`}>
+          {t("admin.attendanceOutsideGeofence")}
+        </span>
+      ) : p.outsideGeofence ? (
+        <span className={`${metaCaption} text-amber-600`}>반경 밖</span>
+      ) : null;
     return (
       <>
         {p.site.name}
         <span className={metaCaption}>{distanceText}</span>
+        {outsideText}
       </>
     );
   }

@@ -6,6 +6,7 @@ import {
 } from "@/lib/attendancePunchRules";
 import { DEFAULT_COMPANY_TIMEZONE } from "@/lib/companyTimezones";
 import { evaluateAttendanceWorkFlags } from "@/lib/companyWorkSchedule";
+import { resolveEmployeeWorkSchedule } from "@/lib/employeeWorkSchedule";
 import {
   FACE_DESCRIPTOR_LENGTH,
   isFaceMatch,
@@ -16,7 +17,12 @@ import {
   faceVerifiedForAttendance,
 } from "@/lib/integrations/enqueueMvsAttendance";
 import { prisma } from "@/lib/prisma";
-import { computeDistanceFromSite } from "@/lib/siteGeofence";
+import { mapSiteRow, resolvePunchSiteContext } from "@/lib/attendanceSiteContext";
+import {
+  checkGeofencePolicy,
+  geofenceErrorMessage,
+  parseGeofenceMode,
+} from "@/lib/siteGeofence";
 import { AttendanceType } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -37,6 +43,8 @@ const bodySchema = z
     deviceInfo: z.string().max(500).optional(),
     /** 출근 시 필수: 등록 얼굴과 일치 검증 */
     faceDescriptor: z.array(z.number().finite()).length(FACE_DESCRIPTOR_LENGTH).optional(),
+    /** 출장·반경 밖 출퇴근 확인(WARN 모드) */
+    acknowledgeGeofence: z.boolean().optional().default(false),
   })
   .superRefine((data, ctx) => {
     if (data.type === "CHECK_IN" && data.isBusinessTrip) {
@@ -51,7 +59,7 @@ const bodySchema = z
   });
 
 /**
- * 출근/퇴근: 어디서든 가능. 근무지가 등록되어 있으면 거리만 기록(차단하지 않음).
+ * 출근/퇴근: 회사 geofenceMode에 따라 반경 밖 경고·차단. 출장 출근은 반경 검사 생략.
  */
 export async function POST(req: Request) {
   const session = await auth();
@@ -88,29 +96,39 @@ export async function POST(req: Request) {
     photoUrl,
     deviceInfo,
     faceDescriptor,
+    acknowledgeGeofence,
   } = parsed.data;
 
   const employee = await prisma.employee.findFirst({
     where: { id: session.user.employeeId, companyId: session.user.companyId },
     select: {
       id: true,
+      departmentId: true,
       faceDescriptor: true,
       faceEnrolledAt: true,
+      workScheduleType: true,
+      shiftCode: true,
+      workStartTime: true,
+      workEndTime: true,
+      workScheduleByDay: true,
     },
   });
   if (!employee) {
     return NextResponse.json({ error: "직원 정보가 올바르지 않습니다." }, { status: 403 });
   }
 
-  const [company, lastRecord, site] = await Promise.all([
+  const [company, lastRecord, sites] = await Promise.all([
     prisma.company.findUnique({
       where: { id: session.user.companyId },
       select: {
         timezone: true,
         faceRecognitionEnabled: true,
+        geofenceMode: true,
         workStartTime: true,
         workEndTime: true,
         workDays: true,
+        workScheduleByDay: true,
+        shiftPresets: true,
       },
     }),
     prisma.attendanceRecord.findFirst({
@@ -118,7 +136,7 @@ export async function POST(req: Request) {
       orderBy: { timestamp: "desc" },
       select: { type: true, timestamp: true },
     }),
-    prisma.site.findFirst({
+    prisma.site.findMany({
       where: { companyId: session.user.companyId },
       orderBy: { createdAt: "asc" },
       select: {
@@ -127,6 +145,11 @@ export async function POST(req: Request) {
         latitude: true,
         longitude: true,
         allowedRadius: true,
+        workScheduleMode: true,
+        shiftCode: true,
+        workStartTime: true,
+        workEndTime: true,
+        departments: { select: { departmentId: true } },
       },
     }),
   ]);
@@ -203,18 +226,61 @@ export async function POST(req: Request) {
   const ua = req.headers.get("user-agent") ?? "";
   const mergedDevice = deviceInfo?.trim() || ua.slice(0, 500);
 
-  const workFlags = evaluateAttendanceWorkFlags(now, tz, type, {
-    workStartTime: company.workStartTime,
-    workEndTime: company.workEndTime,
-    workDays: company.workDays,
-  });
+  const skipSiteLink = isBusinessTrip && type === "CHECK_IN";
+  const siteRows = sites.map(mapSiteRow);
+  const siteCtx = resolvePunchSiteContext(
+    siteRows,
+    employee.departmentId,
+    latitude,
+    longitude,
+    skipSiteLink
+  );
 
-  let siteId: string | null = null;
-  let distanceFromSite = 0;
-  if (site) {
-    distanceFromSite = computeDistanceFromSite(site, latitude, longitude);
-    siteId = isBusinessTrip && type === "CHECK_IN" ? null : site.id;
+  const geofenceMode = parseGeofenceMode(company.geofenceMode);
+  const geofence = checkGeofencePolicy(
+    geofenceMode,
+    siteCtx.nearestSite,
+    latitude,
+    longitude,
+    { skip: skipSiteLink, acknowledgeGeofence }
+  );
+
+  if (geofence.action === "block") {
+    return NextResponse.json(
+      {
+        error: geofenceErrorMessage(geofence.distanceMeters, geofence.allowedRadius),
+        code: "GEOFENCE_BLOCKED",
+        siteName: geofence.siteName,
+        distanceMeters: geofence.distanceMeters,
+        allowedRadius: geofence.allowedRadius,
+      },
+      { status: 400 }
+    );
   }
+
+  if (geofence.action === "warn") {
+    return NextResponse.json(
+      {
+        error: geofenceErrorMessage(geofence.distanceMeters, geofence.allowedRadius),
+        code: "GEOFENCE_WARNING",
+        siteName: geofence.siteName,
+        distanceMeters: geofence.distanceMeters,
+        allowedRadius: geofence.allowedRadius,
+      },
+      { status: 409 }
+    );
+  }
+
+  const effectiveSchedule = resolveEmployeeWorkSchedule(
+    employee,
+    company,
+    siteCtx.nearestSite
+  );
+  const workFlags = evaluateAttendanceWorkFlags(now, tz, type, effectiveSchedule);
+
+  const siteId = siteCtx.siteId;
+  const distanceFromSite = siteCtx.distanceFromSite;
+  const outsideGeofence = geofence.outsideGeofence;
 
   // 조퇴(정규 퇴근시각 이전 퇴근) 인 경우 사유 필수 + 관리자 승인 대상으로 처리
   const earlyLeavePending = type === "CHECK_OUT" && workFlags.isEarlyLeave;
@@ -240,6 +306,7 @@ export async function POST(req: Request) {
         longitude,
         accuracy: accuracy ?? null,
         distanceFromSite,
+        outsideGeofence,
         // 조퇴 시 PENDING — 관리자 승인 후 APPROVED 로 전환
         status: earlyLeavePending ? "PENDING" : "APPROVED",
         memo: memo?.trim() || null,
@@ -287,6 +354,7 @@ export async function POST(req: Request) {
     id: result.record.id,
     status: result.record.status,
     distanceFromSite: result.record.distanceFromSite,
+    outsideGeofence: result.record.outsideGeofence,
     siteName: result.record.site?.name ?? null,
     isBusinessTrip: result.record.isBusinessTrip,
     businessTripLocation: result.record.businessTripLocation,
@@ -301,6 +369,8 @@ export async function POST(req: Request) {
     pendingApproval: earlyLeavePending,
     message: earlyLeavePending
       ? "조퇴 요청이 접수되었습니다. 관리자 승인 후 확정됩니다."
-      : "정상 처리되었습니다.",
+      : outsideGeofence
+        ? "근무지 반경 밖에서 기록되었습니다."
+        : "정상 처리되었습니다.",
   });
 }

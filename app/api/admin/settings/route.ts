@@ -1,8 +1,15 @@
 import { auth } from "@/auth";
 import { DEFAULT_COMPANY_TIMEZONE, isValidIanaTimezone } from "@/lib/companyTimezones";
-import { formatWorkDays, parseWorkDays } from "@/lib/companyWorkSchedule";
+import {
+  formatWorkDays,
+  normalizeWorkScheduleByDay,
+  parseWorkDays,
+  type WorkScheduleByDay,
+} from "@/lib/companyWorkSchedule";
 import { parseHHmm } from "@/lib/attendanceRules";
+import { normalizeShiftPresets, type ShiftPresetsMap } from "@/lib/shiftPresets";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -31,6 +38,9 @@ const companySelect = {
   workStartTime: true,
   workEndTime: true,
   workDays: true,
+  workScheduleByDay: true,
+  shiftPresets: true,
+  geofenceMode: true,
 } as const;
 
 function settingsPayload(
@@ -42,6 +52,9 @@ function settingsPayload(
     workStartTime: string | null;
     workEndTime: string | null;
     workDays: string | null;
+    workScheduleByDay: unknown;
+    shiftPresets: unknown;
+    geofenceMode: string;
   },
   canEdit: boolean
 ) {
@@ -54,6 +67,9 @@ function settingsPayload(
     workEndTime: company.workEndTime,
     workDays: company.workDays,
     workDaysArray: [...parseWorkDays(company.workDays)].sort((a, b) => a - b),
+    workScheduleByDay: normalizeWorkScheduleByDay(company.workScheduleByDay),
+    shiftPresets: normalizeShiftPresets(company.shiftPresets),
+    geofenceMode: company.geofenceMode?.trim() || "OFF",
     canEdit,
   };
 }
@@ -95,6 +111,26 @@ export async function GET(req: Request) {
 }
 
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
+const workWindowSchema = z
+  .object({
+    workStartTime: hhmm,
+    workEndTime: hhmm,
+  })
+  .refine((v) => (parseHHmm(v.workStartTime) ?? 0) < (parseHHmm(v.workEndTime) ?? 0), {
+    message: "퇴근 시각은 출근 시각보다 늦어야 합니다.",
+    path: ["workEndTime"],
+  });
+
+const shiftPresetSchema = z
+  .object({
+    label: z.string().trim().min(1).max(40),
+    workStartTime: hhmm,
+    workEndTime: hhmm,
+  })
+  .refine(
+    (v) => (parseHHmm(v.workStartTime) ?? -1) !== (parseHHmm(v.workEndTime) ?? -2),
+    { message: "출·퇴근 시각이 같을 수 없습니다.", path: ["workEndTime"] }
+  );
 
 const patchSchema = z
   .object({
@@ -116,6 +152,11 @@ const patchSchema = z
       .refine((s) => s === undefined || parseWorkDays(s).size > 0, {
         message: "근무 요일을 하나 이상 선택해 주세요.",
       }),
+    workScheduleByDay: z.record(z.string().regex(/^[0-6]$/), workWindowSchema).optional(),
+    shiftPresets: z
+      .record(z.enum(["A", "B", "C"]), shiftPresetSchema)
+      .optional(),
+    geofenceMode: z.enum(["OFF", "WARN", "BLOCK"]).optional(),
   })
   .refine(
     (data) => {
@@ -151,13 +192,7 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const data: {
-    timezone?: string;
-    faceRecognitionEnabled?: boolean;
-    workStartTime?: string | null;
-    workEndTime?: string | null;
-    workDays?: string;
-  } = {};
+  const data: Prisma.CompanyUpdateInput = {};
 
   if (parsed.data.timezone !== undefined) {
     data.timezone = parsed.data.timezone.trim();
@@ -173,6 +208,26 @@ export async function PATCH(req: Request) {
   }
   if (parsed.data.workDays !== undefined) {
     data.workDays = formatWorkDays(parseWorkDays(parsed.data.workDays));
+  }
+  if (parsed.data.workScheduleByDay !== undefined) {
+    const normalized = normalizeWorkScheduleByDay(parsed.data.workScheduleByDay);
+    const json: Record<string, { workStartTime: string; workEndTime: string }> = {};
+    for (const [day, window] of Object.entries(normalized as WorkScheduleByDay)) {
+      if (!window) continue;
+      json[day] = {
+        workStartTime: window.workStartTime,
+        workEndTime: window.workEndTime,
+      };
+    }
+    data.workScheduleByDay = json as Prisma.InputJsonValue;
+  }
+  if (parsed.data.shiftPresets !== undefined) {
+    const normalized = normalizeShiftPresets(parsed.data.shiftPresets);
+    const json: ShiftPresetsMap = normalized;
+    data.shiftPresets = json as Prisma.InputJsonValue;
+  }
+  if (parsed.data.geofenceMode !== undefined) {
+    data.geofenceMode = parsed.data.geofenceMode;
   }
 
   const company = await prisma.company.update({

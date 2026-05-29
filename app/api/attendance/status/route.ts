@@ -6,6 +6,7 @@ import {
 } from "@/lib/attendancePunchRules";
 import { DEFAULT_COMPANY_TIMEZONE } from "@/lib/companyTimezones";
 import { isCheckOutEarly } from "@/lib/companyWorkSchedule";
+import { resolveEmployeeWorkSchedule } from "@/lib/employeeWorkSchedule";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
@@ -15,18 +16,34 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const company = await prisma.company.findUnique({
-    where: { id: session.user.companyId },
-    select: {
-      timezone: true,
-      workStartTime: true,
-      workEndTime: true,
-      workDays: true,
-    },
-  });
-  if (!company) {
+  const [company, employee] = await Promise.all([
+    prisma.company.findUnique({
+      where: { id: session.user.companyId },
+      select: {
+        timezone: true,
+        workStartTime: true,
+        workEndTime: true,
+        workDays: true,
+        workScheduleByDay: true,
+        shiftPresets: true,
+      },
+    }),
+    prisma.employee.findFirst({
+      where: { id: session.user.employeeId, companyId: session.user.companyId },
+      select: {
+        workScheduleType: true,
+        shiftCode: true,
+        workStartTime: true,
+        workEndTime: true,
+        workScheduleByDay: true,
+      },
+    }),
+  ]);
+  if (!company || !employee) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+
+  const effectiveSchedule = resolveEmployeeWorkSchedule(employee, company);
 
   const tz = company.timezone?.trim() || DEFAULT_COMPANY_TIMEZONE;
   const now = new Date();
@@ -49,11 +66,7 @@ export async function GET() {
   // "지금 퇴근하면 조퇴인가?" — 클라이언트가 사유 입력 UI 를 노출할지 결정
   const earlyLeaveExpected =
     eligibility.canCheckOut &&
-    isCheckOutEarly(now, tz, {
-      workStartTime: company.workStartTime,
-      workEndTime: company.workEndTime,
-      workDays: company.workDays,
-    });
+    isCheckOutEarly(now, tz, effectiveSchedule);
 
   return NextResponse.json({
     ...eligibility,
@@ -62,6 +75,6 @@ export async function GET() {
     lastTimestamp: lastRecord?.timestamp.toISOString() ?? null,
     today: calendarDayInTz(now, tz),
     earlyLeaveExpected,
-    workEndTime: company.workEndTime,
+    workEndTime: effectiveSchedule.workEndTime ?? company.workEndTime,
   });
 }

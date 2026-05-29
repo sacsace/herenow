@@ -16,6 +16,7 @@ import { getAttendanceExportLabels, parseExportLocale } from "@/lib/attendanceEx
 import { buildAttendancePresenceMatrix, resolveExportDateRange } from "@/lib/attendanceExportMatrix";
 import { DEFAULT_COMPANY_TIMEZONE, recordDisplayTimezone } from "@/lib/companyTimezones";
 import { lateMinutesFor, overtimeMinutesFor } from "@/lib/companyWorkSchedule";
+import { resolveEmployeeWorkSchedule } from "@/lib/employeeWorkSchedule";
 import { STORAGE_KEY } from "@/lib/i18n/dictionaries";
 import { prisma } from "@/lib/prisma";
 import ExcelJS from "exceljs";
@@ -78,6 +79,8 @@ export async function GET(req: Request) {
       workStartTime: true,
       workEndTime: true,
       workDays: true,
+      workScheduleByDay: true,
+      shiftPresets: true,
     },
   });
   if (!company) {
@@ -85,10 +88,18 @@ export async function GET(req: Request) {
   }
   const tz = company.timezone?.trim() || DEFAULT_COMPANY_TIMEZONE;
   const downloadFilename = attendanceExportFilename(company.name, tz, locale);
-  const schedule = {
+  const companySchedule = {
     workStartTime: company.workStartTime ?? null,
     workEndTime: company.workEndTime ?? null,
     workDays: company.workDays ?? null,
+    workScheduleByDay: company.workScheduleByDay ?? null,
+    shiftPresets: company.shiftPresets ?? null,
+  };
+  const defaultSchedule = {
+    workStartTime: companySchedule.workStartTime,
+    workEndTime: companySchedule.workEndTime,
+    workDays: companySchedule.workDays,
+    workScheduleByDay: companySchedule.workScheduleByDay,
   };
 
   const status = url.searchParams.get("status") ?? undefined;
@@ -107,7 +118,7 @@ export async function GET(req: Request) {
     };
   }
 
-  const [records, employees] = await Promise.all([
+  const [records, employees, employeeSchedules] = await Promise.all([
     prisma.attendanceRecord.findMany({
       where: {
         companyId,
@@ -131,17 +142,36 @@ export async function GET(req: Request) {
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
+    prisma.employee.findMany({
+      where: {
+        companyId,
+        ...(departmentId ? { departmentId } : {}),
+      },
+      select: {
+        id: true,
+        workScheduleType: true,
+        shiftCode: true,
+        workStartTime: true,
+        workEndTime: true,
+        workScheduleByDay: true,
+      },
+    }),
   ]);
+
+  const scheduleByEmployee = new Map(
+    employeeSchedules.map((e) => [e.id, resolveEmployeeWorkSchedule(e, companySchedule)])
+  );
 
   const augmented = records.map((r) => {
     let lateMinutes = r.lateMinutes;
     let overtimeMinutes = r.overtimeMinutes;
     const rt = recordDisplayTimezone(r, tz);
+    const sched = scheduleByEmployee.get(r.employeeId) ?? defaultSchedule;
     if (r.type === "CHECK_IN" && r.isLate && lateMinutes <= 0) {
-      lateMinutes = lateMinutesFor(r.timestamp, rt, schedule);
+      lateMinutes = lateMinutesFor(r.timestamp, rt, sched);
     }
     if (r.type === "CHECK_OUT" && r.isOvertime && overtimeMinutes <= 0) {
-      overtimeMinutes = overtimeMinutesFor(r.timestamp, rt, schedule);
+      overtimeMinutes = overtimeMinutesFor(r.timestamp, rt, sched);
     }
     return { ...r, lateMinutes, overtimeMinutes };
   });

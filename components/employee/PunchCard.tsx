@@ -342,6 +342,56 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
     return true;
   }
 
+  async function postAttendance(
+    body: Record<string, unknown>,
+    acknowledgeGeofence = false
+  ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; message: string }> {
+    const res = await fetch("/api/attendance", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, acknowledgeGeofence }),
+    });
+    const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+
+    if (res.status === 409 && j.code === "GEOFENCE_WARNING" && !acknowledgeGeofence) {
+      const siteName = typeof j.siteName === "string" ? j.siteName : "";
+      const distance =
+        typeof j.distanceMeters === "number" ? Math.round(j.distanceMeters) : "?";
+      const allowed =
+        typeof j.allowedRadius === "number" ? Math.round(j.allowedRadius) : "?";
+      const confirmMsg = t("employee.geofenceConfirm")
+        .replace("{site}", siteName)
+        .replace("{distance}", String(distance))
+        .replace("{radius}", String(allowed));
+      if (window.confirm(confirmMsg)) {
+        return postAttendance(body, true);
+      }
+      return {
+        ok: false,
+        message:
+          typeof j.error === "string" ? j.error : t("employee.geofenceCancelled"),
+      };
+    }
+
+    if (!res.ok) {
+      if (j.code === "EARLY_LEAVE_REASON_REQUIRED") {
+        return { ok: false, message: t("employee.earlyLeaveReasonRequired") };
+      }
+      const err = j.error as unknown;
+      return {
+        ok: false,
+        message:
+          typeof err === "string"
+            ? err
+            : err != null
+              ? JSON.stringify(err)
+              : t("employee.saveFail"),
+      };
+    }
+
+    return { ok: true, data: j };
+  }
+
   async function submitCheckIn(faceDescriptor?: number[]): Promise<boolean> {
     if (!punchStatus?.canCheckIn) {
       setMsg(checkInBlockMessage() ?? t("employee.alreadyCheckedIn"));
@@ -365,38 +415,27 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
           return false;
         }
       }
-      const res = await fetch("/api/attendance", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "CHECK_IN",
-          latitude: lat,
-          longitude: lng,
-          accuracy: acc,
-          isBusinessTrip: checkInMode === "businessTrip",
-          businessTripLocation:
-            checkInMode === "businessTrip" ? businessTripLocation.trim() : undefined,
-          businessTripReason:
-            checkInMode === "businessTrip" ? businessTripReason.trim() : undefined,
-          memo: checkInMode === "normal" ? memo.trim() || undefined : undefined,
-          photoUrl: photoUrl || undefined,
-          ...(faceDescriptor ? { faceDescriptor } : {}),
-        }),
+      const result = await postAttendance({
+        type: "CHECK_IN",
+        latitude: lat,
+        longitude: lng,
+        accuracy: acc,
+        isBusinessTrip: checkInMode === "businessTrip",
+        businessTripLocation:
+          checkInMode === "businessTrip" ? businessTripLocation.trim() : undefined,
+        businessTripReason:
+          checkInMode === "businessTrip" ? businessTripReason.trim() : undefined,
+        memo: checkInMode === "normal" ? memo.trim() || undefined : undefined,
+        photoUrl: photoUrl || undefined,
+        ...(faceDescriptor ? { faceDescriptor } : {}),
       });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const err = j.error as unknown;
-        setMsg(
-          typeof err === "string"
-            ? err
-            : err != null
-              ? JSON.stringify(err)
-              : "저장에 실패했습니다."
-        );
+      if (!result.ok) {
+        setMsg(result.message);
         setBusy(false);
         return false;
       }
-      setMsg(j.message ?? "저장되었습니다.");
+      const j = result.data;
+      setMsg(typeof j.message === "string" ? j.message : t("employee.saved"));
       setMemo("");
       setBusinessTripLocation("");
       setBusinessTripReason("");
@@ -436,40 +475,25 @@ export function PunchCard({ variant = "full", showRecentRecords }: PunchCardProp
         setPreviewCoords({ lat, lng });
       }
 
-      const res = await fetch("/api/attendance", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "CHECK_OUT",
-          latitude: lat,
-          longitude: lng,
-          accuracy: acc,
-          memo: memo.trim() || undefined,
-          earlyLeaveReason: earlyLeaveReason.trim() || undefined,
-          ...(faceDescriptor ? { faceDescriptor } : {}),
-        }),
+      const result = await postAttendance({
+        type: "CHECK_OUT",
+        latitude: lat,
+        longitude: lng,
+        accuracy: acc,
+        memo: memo.trim() || undefined,
+        earlyLeaveReason: earlyLeaveReason.trim() || undefined,
+        ...(faceDescriptor ? { faceDescriptor } : {}),
       });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        // 서버가 사유를 요구하는 케이스 — 사용자에게 입력 안내
-        if (j.code === "EARLY_LEAVE_REASON_REQUIRED") {
-          setMsg(t("employee.earlyLeaveReasonRequired"));
-          setBusy(false);
+      if (!result.ok) {
+        if (result.message === t("employee.earlyLeaveReasonRequired")) {
           await reloadPunchStatus();
-          return false;
         }
-        const err = j.error as unknown;
-        setMsg(
-          typeof err === "string"
-            ? err
-            : err != null
-              ? JSON.stringify(err)
-              : t("employee.saveFail")
-        );
+        setMsg(result.message);
         setBusy(false);
         return false;
       }
-      setMsg(j.message ?? t("employee.saved"));
+      const j = result.data;
+      setMsg(typeof j.message === "string" ? j.message : t("employee.saved"));
       setMemo("");
       setEarlyLeaveReason("");
       const recordId = typeof j.id === "string" ? j.id : null;

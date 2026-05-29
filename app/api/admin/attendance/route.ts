@@ -2,6 +2,7 @@ import { auth } from "@/auth";
 import { aggregateAttendanceByDay, filterAttendanceDayRows } from "@/lib/adminAttendanceByDay";
 import { DEFAULT_COMPANY_TIMEZONE, recordDisplayTimezone } from "@/lib/companyTimezones";
 import { lateMinutesFor, overtimeMinutesFor } from "@/lib/companyWorkSchedule";
+import { resolveEmployeeWorkSchedule } from "@/lib/employeeWorkSchedule";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
@@ -45,6 +46,8 @@ export async function GET(req: Request) {
       workStartTime: true,
       workEndTime: true,
       workDays: true,
+      workScheduleByDay: true,
+      shiftPresets: true,
     },
   });
   if (!company) {
@@ -52,11 +55,33 @@ export async function GET(req: Request) {
   }
 
   const tz = company.timezone?.trim() || DEFAULT_COMPANY_TIMEZONE;
-  const schedule = {
+  const companySchedule = {
     workStartTime: company.workStartTime ?? null,
     workEndTime: company.workEndTime ?? null,
     workDays: company.workDays ?? null,
+    workScheduleByDay: company.workScheduleByDay ?? null,
+    shiftPresets: company.shiftPresets ?? null,
   };
+  const defaultSchedule = {
+    workStartTime: companySchedule.workStartTime,
+    workEndTime: companySchedule.workEndTime,
+    workDays: companySchedule.workDays,
+    workScheduleByDay: companySchedule.workScheduleByDay,
+  };
+  const employeeSchedules = await prisma.employee.findMany({
+    where: { companyId },
+    select: {
+      id: true,
+      workScheduleType: true,
+      shiftCode: true,
+      workStartTime: true,
+      workEndTime: true,
+      workScheduleByDay: true,
+    },
+  });
+  const scheduleByEmployee = new Map(
+    employeeSchedules.map((e) => [e.id, resolveEmployeeWorkSchedule(e, companySchedule)])
+  );
 
   const records = await prisma.attendanceRecord.findMany({
     where: {
@@ -78,11 +103,12 @@ export async function GET(req: Request) {
     let lateMinutes = r.lateMinutes;
     let overtimeMinutes = r.overtimeMinutes;
     const rt = recordDisplayTimezone(r, tz);
+    const sched = scheduleByEmployee.get(r.employeeId) ?? defaultSchedule;
     if (r.type === "CHECK_IN" && r.isLate && lateMinutes <= 0) {
-      lateMinutes = lateMinutesFor(r.timestamp, rt, schedule);
+      lateMinutes = lateMinutesFor(r.timestamp, rt, sched);
     }
     if (r.type === "CHECK_OUT" && r.isOvertime && overtimeMinutes <= 0) {
-      overtimeMinutes = overtimeMinutesFor(r.timestamp, rt, schedule);
+      overtimeMinutes = overtimeMinutesFor(r.timestamp, rt, sched);
     }
     return { ...r, lateMinutes, overtimeMinutes };
   });

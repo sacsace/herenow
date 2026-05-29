@@ -21,7 +21,16 @@ export type CompanyWorkSchedule = {
   workStartTime: string | null;
   workEndTime: string | null;
   workDays: string | null;
+  /** {"1":{"workStartTime":"09:00","workEndTime":"18:00"}, ...} */
+  workScheduleByDay?: unknown;
 };
+
+export type WorkDayTimeWindow = {
+  workStartTime: string;
+  workEndTime: string;
+};
+
+export type WorkScheduleByDay = Partial<Record<number, WorkDayTimeWindow>>;
 
 export type AttendanceWorkFlags = {
   isLate: boolean;
@@ -63,6 +72,43 @@ export function isWorkDay(timestamp: Date, timeZone: string, workDays: Set<numbe
   return workDays.has(localWeekday(timestamp, timeZone));
 }
 
+/** 요일별 시간표(JSON) 정규화 */
+export function normalizeWorkScheduleByDay(raw: unknown): WorkScheduleByDay {
+  if (!raw || typeof raw !== "object") return {};
+  const obj = raw as Record<string, unknown>;
+  const out: WorkScheduleByDay = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const day = Number(k);
+    if (!Number.isInteger(day) || day < 0 || day > 6) continue;
+    if (!v || typeof v !== "object") continue;
+    const item = v as Record<string, unknown>;
+    const start = typeof item.workStartTime === "string" ? item.workStartTime.trim() : "";
+    const end = typeof item.workEndTime === "string" ? item.workEndTime.trim() : "";
+    const startMin = parseHHmm(start);
+    const endMin = parseHHmm(end);
+    if (startMin == null || endMin == null || startMin >= endMin) continue;
+    out[day] = { workStartTime: start, workEndTime: end };
+  }
+  return out;
+}
+
+function resolveWorkMinutesWindow(
+  timestamp: Date,
+  timeZone: string,
+  schedule: CompanyWorkSchedule
+): { startMin: number | null; endMin: number | null } {
+  const tz = timeZone.trim() || "UTC";
+  const day = localWeekday(timestamp, tz);
+  const byDay = normalizeWorkScheduleByDay(schedule.workScheduleByDay);
+  const dayWindow = byDay[day];
+  const startStr = dayWindow?.workStartTime ?? schedule.workStartTime ?? DEFAULT_WORK_START;
+  const endStr = dayWindow?.workEndTime ?? schedule.workEndTime ?? DEFAULT_WORK_END;
+  return {
+    startMin: parseHHmm(startStr),
+    endMin: parseHHmm(endStr),
+  };
+}
+
 export function evaluateAttendanceWorkFlags(
   timestamp: Date,
   timeZone: string,
@@ -73,8 +119,7 @@ export function evaluateAttendanceWorkFlags(
   const workDays = parseWorkDays(schedule.workDays);
   const onWorkDay = isWorkDay(timestamp, tz, workDays);
   const nowMin = localMinutesFromDate(timestamp, tz);
-  const startMin = parseHHmm(schedule.workStartTime ?? DEFAULT_WORK_START);
-  const endMin = parseHHmm(schedule.workEndTime ?? DEFAULT_WORK_END);
+  const { startMin, endMin } = resolveWorkMinutesWindow(timestamp, tz, schedule);
 
   let isLate = false;
   let isEarlyLeave = false;
@@ -83,13 +128,30 @@ export function evaluateAttendanceWorkFlags(
   let lateMinutes = 0;
   let overtimeMinutes = 0;
 
+  const isOvernight =
+    startMin != null && endMin != null && endMin <= startMin;
+
   if (type === "CHECK_IN") {
-    if (onWorkDay && startMin != null && nowMin > startMin) {
-      isLate = true;
-      lateMinutes = nowMin - startMin;
+    if (onWorkDay && startMin != null) {
+      if (isOvernight) {
+        if (nowMin > startMin) {
+          isLate = true;
+          lateMinutes = nowMin - startMin;
+        }
+      } else if (nowMin > startMin) {
+        isLate = true;
+        lateMinutes = nowMin - startMin;
+      }
     }
-  } else {
-    if (onWorkDay && endMin != null) {
+  } else if (onWorkDay && endMin != null) {
+    if (isOvernight) {
+      if (nowMin < endMin && nowMin < (startMin ?? 0)) isEarlyLeave = true;
+      if (nowMin > endMin && nowMin < (startMin ?? 24 * 60)) {
+        isOvertime = true;
+        overtimeMinutes = nowMin - endMin;
+      }
+      if (startMin != null && nowMin > startMin) isEarlyLeave = true;
+    } else {
       if (nowMin < endMin) isEarlyLeave = true;
       if (nowMin > endMin) {
         isOvertime = true;
@@ -118,7 +180,7 @@ export function lateMinutesFor(
   const tz = timeZone.trim() || "UTC";
   const workDays = parseWorkDays(schedule.workDays);
   if (!isWorkDay(timestamp, tz, workDays)) return 0;
-  const startMin = parseHHmm(schedule.workStartTime ?? DEFAULT_WORK_START);
+  const { startMin } = resolveWorkMinutesWindow(timestamp, tz, schedule);
   if (startMin == null) return 0;
   const nowMin = localMinutesFromDate(timestamp, tz);
   return Math.max(0, nowMin - startMin);
@@ -136,7 +198,7 @@ export function overtimeMinutesFor(
   const tz = timeZone.trim() || "UTC";
   const workDays = parseWorkDays(schedule.workDays);
   if (!isWorkDay(timestamp, tz, workDays)) return 0;
-  const endMin = parseHHmm(schedule.workEndTime ?? DEFAULT_WORK_END);
+  const { endMin } = resolveWorkMinutesWindow(timestamp, tz, schedule);
   if (endMin == null) return 0;
   const nowMin = localMinutesFromDate(timestamp, tz);
   return Math.max(0, nowMin - endMin);

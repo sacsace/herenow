@@ -1,10 +1,23 @@
 "use client";
 
+import { EmployeeBulkImportPanel } from "@/components/admin/EmployeeBulkImportPanel";
 import {
   DepartmentManagerModal,
   type Department,
 } from "@/components/admin/DepartmentManagerModal";
 import { EmployeeListTable } from "@/components/admin/EmployeeListTable";
+import { EmployeeWorkScheduleBulkBar } from "@/components/admin/EmployeeWorkScheduleBulkBar";
+import {
+  EmployeeWorkScheduleModal,
+  type EmployeeScheduleTarget,
+} from "@/components/admin/EmployeeWorkScheduleModal";
+import { employeeScheduleSummary } from "@/lib/employeeWorkSchedule";
+import {
+  DEFAULT_SHIFT_PRESETS,
+  localizeShiftPresetsMap,
+  type ShiftLocale,
+  type ShiftPresetsMap,
+} from "@/lib/shiftPresets";
 import { useI18n } from "@/components/LanguageProvider";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -14,12 +27,19 @@ import {
   card,
   cardBody,
   errorText,
+  emptyStateCompact,
+  hint,
   input,
   label,
   link,
   pageStack,
+  searchFieldCol,
+  searchFieldWrap,
+  searchFiltersRow,
   sectionLabel,
   select,
+  tableToolbar,
+  tableWrap,
 } from "@/lib/uiStyles";
 import {
   assignableRolesForCaller,
@@ -34,12 +54,17 @@ type Emp = {
   name: string;
   user: { id: string; email: string; role: string };
   department: { id: string; name: string } | null;
+  workScheduleType?: string | null;
+  shiftCode?: string | null;
+  workStartTime?: string | null;
+  workEndTime?: string | null;
+  scheduleSummary?: string;
 };
 
 const profileEditRoles = new Set<Role>(["COMPANY_ADMIN", "HR_MANAGER", "SUPER_ADMIN"]);
 
 export default function AdminEmployeesPage() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { data: sessionData } = useSession();
   const callerRole = (sessionData?.user?.role ?? null) as Role | null;
   const callerUserId = sessionData?.user?.id ?? null;
@@ -58,6 +83,16 @@ export default function AdminEmployeesPage() {
   const [rowError, setRowError] = useState<string | null>(null);
   const [passwordEditId, setPasswordEditId] = useState<string | null>(null);
   const [passwordDraft, setPasswordDraft] = useState("");
+  const [shiftPresets, setShiftPresets] = useState<ShiftPresetsMap>(DEFAULT_SHIFT_PRESETS);
+  const [companyDefault, setCompanyDefault] = useState({
+    workStartTime: "09:00",
+    workEndTime: "18:00",
+  });
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [scheduleModalEmp, setScheduleModalEmp] = useState<EmployeeScheduleTarget | null>(null);
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [departmentFilterId, setDepartmentFilterId] = useState("");
 
   const assignableRoles = useMemo(
     () => assignableRolesForCaller(callerRole),
@@ -73,7 +108,38 @@ export default function AdminEmployeesPage() {
       const ej = await er.json().catch(() => ({}));
       const bj = await br.json().catch(() => ({}));
       if (er.ok) {
-        setEmployees(Array.isArray(ej.employees) ? ej.employees : []);
+        const rows = Array.isArray(ej.employees) ? (ej.employees as Emp[]) : [];
+        const cs = ej.companySchedule as {
+          workStartTime?: string | null;
+          workEndTime?: string | null;
+          workDays?: string | null;
+          workScheduleByDay?: unknown;
+          shiftPresets?: unknown;
+        } | undefined;
+        const companySchedule = {
+          workStartTime: cs?.workStartTime ?? "09:00",
+          workEndTime: cs?.workEndTime ?? "18:00",
+          workDays: cs?.workDays ?? null,
+          workScheduleByDay: cs?.workScheduleByDay,
+          shiftPresets: cs?.shiftPresets,
+        };
+        setCompanyDefault({
+          workStartTime: companySchedule.workStartTime ?? "09:00",
+          workEndTime: companySchedule.workEndTime ?? "18:00",
+        });
+        const loc: ShiftLocale = locale === "en" ? "en" : "ko";
+        setShiftPresets(
+          localizeShiftPresetsMap(
+            (ej.shiftPresets as ShiftPresetsMap | undefined) ?? DEFAULT_SHIFT_PRESETS,
+            loc
+          )
+        );
+        setEmployees(
+          rows.map((e) => ({
+            ...e,
+            scheduleSummary: employeeScheduleSummary(e, companySchedule, loc).label,
+          }))
+        );
         setError(null);
       } else if (typeof ej?.error === "string") {
         setError(ej.error);
@@ -84,7 +150,12 @@ export default function AdminEmployeesPage() {
     } catch (e) {
       console.error("[employees load]", e);
     }
-  }, []);
+  }, [locale]);
+
+  useEffect(() => {
+    const loc: ShiftLocale = locale === "en" ? "en" : "ko";
+    setShiftPresets((prev) => localizeShiftPresetsMap(prev, loc));
+  }, [locale]);
 
   const loadDepartments = useCallback(async () => {
     try {
@@ -152,6 +223,80 @@ export default function AdminEmployeesPage() {
   }
 
   const canEditProfile = callerRole != null && profileEditRoles.has(callerRole);
+  const canBulkAdd =
+    callerRole === "COMPANY_ADMIN" || callerRole === "HR_MANAGER";
+
+  const filteredEmployees = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return employees.filter((e) => {
+      if (departmentFilterId === "__none__") {
+        if (e.department) return false;
+      } else if (departmentFilterId && e.department?.id !== departmentFilterId) {
+        return false;
+      }
+      if (!q) return true;
+      const haystack = [e.name, e.user.email, e.department?.name ?? "", e.scheduleSummary ?? ""]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [employees, searchQuery, departmentFilterId]);
+
+  useEffect(() => {
+    const visible = new Set(filteredEmployees.map((e) => e.id));
+    setSelectedIds((prev) => {
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filteredEmployees]);
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    const ids = filteredEmployees.map((e) => e.id);
+    setSelectedIds((prev) => {
+      const allVisibleSelected = ids.length > 0 && ids.every((id) => prev.has(id));
+      if (allVisibleSelected) {
+        const next = new Set(prev);
+        for (const id of ids) next.delete(id);
+        return next;
+      }
+      const next = new Set(prev);
+      for (const id of ids) next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkApplySchedule(payload: {
+    workScheduleType: "COMPANY" | "SHIFT" | "CUSTOM";
+    shiftCode?: "A" | "B" | "C";
+    workStartTime?: string;
+    workEndTime?: string;
+  }): Promise<boolean> {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return false;
+    const r = await fetch("/api/admin/employees/work-schedule", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ employeeIds: ids, ...payload }),
+    });
+    if (!r.ok) return false;
+    setSelectedIds(new Set());
+    await loadEmployees();
+    return true;
+  }
+
+  function openScheduleModal(emp: Emp) {
+    setScheduleModalEmp(emp);
+    setScheduleModalOpen(true);
+  }
 
   async function patchEmployee(
     empId: string,
@@ -531,13 +676,91 @@ export default function AdminEmployeesPage() {
             </form>
           </div>
         </div>
+        {canBulkAdd && !noDepartments && (
+          <EmployeeBulkImportPanel onImported={() => void loadAll()} />
+        )}
       </section>
 
       <section>
         <p className={sectionLabel}>{t("admin.employeesListTitle")}</p>
+        {canEditProfile && (
+          <EmployeeWorkScheduleBulkBar
+            selectedCount={selectedIds.size}
+            shiftPresets={shiftPresets}
+            companyDefault={companyDefault}
+            onApply={bulkApplySchedule}
+            onClearSelection={() => setSelectedIds(new Set())}
+          />
+        )}
         {rowError && <p className={`mb-3 ${errorText}`}>{rowError}</p>}
-        <EmployeeListTable
-            employees={employees}
+
+        <div className={tableWrap}>
+          <div className={tableToolbar}>
+            <div className={`${searchFiltersRow} w-full`}>
+              <div className={`${searchFieldCol} ${searchFieldWrap}`}>
+                <label className={label} htmlFor="employees-search">
+                  {t("admin.employeesSearchLabel")}
+                </label>
+                <input
+                  id="employees-search"
+                  type="search"
+                  className={input}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={t("admin.employeesSearchPlaceholder")}
+                  autoComplete="off"
+                />
+              </div>
+              <div className={`${searchFieldCol} min-w-[10rem] sm:min-w-[12rem]`}>
+                <label className={label} htmlFor="employees-dept-filter">
+                  {t("admin.employeesDepartmentFilter")}
+                </label>
+                <select
+                  id="employees-dept-filter"
+                  className={select}
+                  value={departmentFilterId}
+                  onChange={(e) => setDepartmentFilterId(e.target.value)}
+                >
+                  <option value="">{t("admin.employeesDepartmentAll")}</option>
+                  <option value="__none__">{t("admin.employeesDepartmentUnassigned")}</option>
+                  {departments.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {(searchQuery.trim() || departmentFilterId) && (
+                <button
+                  type="button"
+                  className={`${btnSecondary} self-end`}
+                  onClick={() => {
+                    setSearchQuery("");
+                    setDepartmentFilterId("");
+                  }}
+                >
+                  {t("admin.employeesSearchClear")}
+                </button>
+              )}
+            </div>
+            {employees.length > 0 && (
+              <p className={`mt-3 text-[0.8125rem] ${hint}`}>
+                {t("admin.employeesSearchResultCount")
+                  .replace("{shown}", String(filteredEmployees.length))
+                  .replace("{total}", String(employees.length))}
+              </p>
+            )}
+          </div>
+
+          {employees.length === 0 ? (
+            <p className={`px-5 py-8 sm:px-6 ${emptyStateCompact}`}>{t("admin.employeesEmpty")}</p>
+          ) : filteredEmployees.length === 0 ? (
+            <p className={`px-5 py-8 sm:px-6 ${emptyStateCompact}`}>
+              {t("admin.employeesSearchNoResults")}
+            </p>
+          ) : (
+            <EmployeeListTable
+            employees={filteredEmployees}
             departments={departments}
             canEditProfile={canEditProfile}
             canEditRoles={canEditRoles}
@@ -565,8 +788,27 @@ export default function AdminEmployeesPage() {
             onDelete={(emp) => void deleteEmployee(emp)}
             deleteDisabledReason={deleteDisabledReason}
             roleLabel={roleLabel}
+            canEditSchedule={canEditProfile}
+            onEditSchedule={openScheduleModal}
+            selectedIds={canEditProfile ? selectedIds : undefined}
+            onToggleSelect={canEditProfile ? toggleSelect : undefined}
+            onToggleSelectAll={canEditProfile ? toggleSelectAll : undefined}
           />
+          )}
+        </div>
       </section>
+
+      <EmployeeWorkScheduleModal
+        open={scheduleModalOpen}
+        employee={scheduleModalEmp}
+        shiftPresets={shiftPresets}
+        companyDefault={companyDefault}
+        onClose={() => {
+          setScheduleModalOpen(false);
+          setScheduleModalEmp(null);
+        }}
+        onSaved={() => void loadEmployees()}
+      />
 
       <DepartmentManagerModal
         open={deptModalOpen}

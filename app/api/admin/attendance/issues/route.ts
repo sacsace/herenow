@@ -2,6 +2,7 @@ import { auth } from "@/auth";
 import { calendarDayInTz } from "@/lib/adminMonthlyAttendance";
 import { DEFAULT_COMPANY_TIMEZONE, recordDisplayTimezone } from "@/lib/companyTimezones";
 import { lateMinutesFor, parseWorkDays } from "@/lib/companyWorkSchedule";
+import { resolveEmployeeWorkSchedule } from "@/lib/employeeWorkSchedule";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
@@ -82,6 +83,8 @@ export async function GET(req: Request) {
       workStartTime: true,
       workEndTime: true,
       workDays: true,
+      workScheduleByDay: true,
+      shiftPresets: true,
     },
   });
   if (!company) {
@@ -89,10 +92,18 @@ export async function GET(req: Request) {
   }
 
   const tz = company.timezone?.trim() || DEFAULT_COMPANY_TIMEZONE;
-  const schedule = {
+  const companySchedule = {
     workStartTime: company.workStartTime ?? null,
     workEndTime: company.workEndTime ?? null,
     workDays: company.workDays ?? null,
+    workScheduleByDay: company.workScheduleByDay ?? null,
+    shiftPresets: company.shiftPresets ?? null,
+  };
+  const defaultSchedule = {
+    workStartTime: companySchedule.workStartTime,
+    workEndTime: companySchedule.workEndTime,
+    workDays: companySchedule.workDays,
+    workScheduleByDay: companySchedule.workScheduleByDay,
   };
   const workDaySet = parseWorkDays(company.workDays);
 
@@ -113,10 +124,19 @@ export async function GET(req: Request) {
     select: {
       id: true,
       name: true,
+      workScheduleType: true,
+      shiftCode: true,
+      workStartTime: true,
+      workEndTime: true,
+      workScheduleByDay: true,
       department: { select: { id: true, name: true } },
     },
     orderBy: { name: "asc" },
   });
+
+  const scheduleByEmployee = new Map(
+    employees.map((e) => [e.id, resolveEmployeeWorkSchedule(e, companySchedule)])
+  );
 
   if (employees.length === 0) {
     return NextResponse.json({
@@ -200,7 +220,8 @@ export async function GET(req: Request) {
       state.hasCheckIn = true;
       if (r.isLate) {
         state.isLate = true;
-        const min = r.lateMinutes > 0 ? r.lateMinutes : lateMinutesFor(r.timestamp, rt, schedule);
+        const sched = scheduleByEmployee.get(r.employeeId) ?? defaultSchedule;
+        const min = r.lateMinutes > 0 ? r.lateMinutes : lateMinutesFor(r.timestamp, rt, sched);
         if (min > state.lateMinutes) state.lateMinutes = min;
       }
     } else {
